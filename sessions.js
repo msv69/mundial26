@@ -1,0 +1,360 @@
+// ============================================================
+// SERVER — node:http nativo + node:sqlite nativo
+// Tabellone Mondiale 2026, backend condiviso multi-utente
+// ZERO dipendenze npm esterne: gira con il solo Node.js installato
+// ============================================================
+const path = require("path");
+const fs = require("fs");
+const http = require("http");
+const url = require("url");
+
+const { Router, readJsonBody } = require("./router");
+const { sessionMiddleware, applySessionCookie } = require("./sessions");
+const { hashPassword, verifyPassword } = require("./auth");
+const { db, init, generateAccessCode } = require("./db");
+const { MATCHES, GROUPS, ALL_TEAMS, POINTS } = require("./data");
+const { computeLeaderboard, getRealMatches, getRealGroupOrder, getRealAwards } = require("./scoring");
+
+init();
+
+const PORT = process.env.PORT || 3000;
+const ADMIN_PASSWORD_DEFAULT = process.env.ADMIN_PASSWORD || "mondiale2026";
+const PUBLIC_DIR = path.join(__dirname, "..", "public");
+
+function ensureAdminPassword(){
+  const row = db.prepare("SELECT * FROM admin_settings WHERE id = 1").get();
+  if(!row){
+    const hash = hashPassword(ADMIN_PASSWORD_DEFAULT);
+    db.prepare("INSERT INTO admin_settings (id, password_hash) VALUES (1, ?)").run(hash);
+    console.log("Password admin inizializzata (variabile ADMIN_PASSWORD o default 'mondiale2026').");
+  }
+}
+ensureAdminPassword();
+
+// ============================================================
+// HELPERS RISPOSTA JSON
+// ============================================================
+function sendJson(res, statusCode, payload){
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(body);
+}
+function requireParticipant(req, res){
+  if(!req.session.participantId){
+    sendJson(res, 401, { error: "Accesso non autorizzato: effettua il login con il tuo codice" });
+    return false;
+  }
+  return true;
+}
+function requireAdmin(req, res){
+  if(!req.session.isAdmin){
+    sendJson(res, 401, { error: "Accesso admin richiesto" });
+    return false;
+  }
+  return true;
+}
+
+// ============================================================
+// ROUTER — definizione di tutte le rotte API
+// ============================================================
+const router = new Router();
+
+// ---- AUTH CONCORRENTI ----
+router.post("/api/auth/participant-login", async (req, res) => {
+  const body = await readJsonBody(req);
+  const code = (body.accessCode || "").trim().toUpperCase();
+  if(!code) return sendJson(res, 400, { error: "Codice di accesso mancante" });
+  const p = db.prepare("SELECT * FROM participants WHERE access_code = ?").get(code);
+  if(!p) return sendJson(res, 401, { error: "Codice di accesso non valido" });
+  req.session.participantId = p.id;
+  req.session.isAdmin = false;
+  sendJson(res, 200, { id: p.id, name: p.name, team: p.team });
+});
+
+router.post("/api/auth/logout", async (req, res) => {
+  req.session.destroy();
+  sendJson(res, 200, { ok: true });
+});
+
+router.get("/api/auth/me", async (req, res) => {
+  if(req.session.participantId){
+    const p = db.prepare("SELECT id, name, team FROM participants WHERE id = ?").get(req.session.participantId);
+    if(p) return sendJson(res, 200, { type: "participant", ...p });
+  }
+  if(req.session.isAdmin) return sendJson(res, 200, { type: "admin" });
+  sendJson(res, 200, { type: "guest" });
+});
+
+// ---- AUTH ADMIN ----
+router.post("/api/auth/admin-login", async (req, res) => {
+  const body = await readJsonBody(req);
+  const row = db.prepare("SELECT * FROM admin_settings WHERE id = 1").get();
+  if(!row || !verifyPassword(body.password || "", row.password_hash)){
+    return sendJson(res, 401, { error: "Password errata" });
+  }
+  req.session.isAdmin = true;
+  req.session.participantId = null;
+  sendJson(res, 200, { ok: true });
+});
+
+router.post("/api/admin/change-password", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  const body = await readJsonBody(req);
+  if(!body.newPassword || body.newPassword.length < 4){
+    return sendJson(res, 400, { error: "Password troppo corta (minimo 4 caratteri)" });
+  }
+  const hash = hashPassword(body.newPassword);
+  db.prepare("UPDATE admin_settings SET password_hash = ? WHERE id = 1").run(hash);
+  sendJson(res, 200, { ok: true });
+});
+
+// ---- DATI TORNEO (pubblici) ----
+router.get("/api/tournament", async (req, res) => {
+  sendJson(res, 200, { groups: GROUPS, teams: ALL_TEAMS, matches: MATCHES, points: POINTS });
+});
+
+// ---- CONCORRENTI ----
+router.get("/api/participants", async (req, res) => {
+  const rows = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  sendJson(res, 200, rows);
+});
+
+router.get("/api/admin/participants", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  const rows = db.prepare("SELECT id, name, team, access_code FROM participants ORDER BY id").all();
+  sendJson(res, 200, rows);
+});
+
+router.post("/api/admin/participants/:id/regenerate-code", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const id = parseInt(params.id, 10);
+  const newCode = generateAccessCode();
+  db.prepare("UPDATE participants SET access_code = ? WHERE id = ?").run(newCode, id);
+  sendJson(res, 200, { id, accessCode: newCode });
+});
+
+router.put("/api/admin/participants/:id", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const id = parseInt(params.id, 10);
+  const body = await readJsonBody(req);
+  db.prepare("UPDATE participants SET name = ?, team = ? WHERE id = ?").run(body.name, body.team || "", id);
+  sendJson(res, 200, { ok: true });
+});
+
+// ---- PRONOSTICI: PARTITE ----
+router.get("/api/predictions/matches", async (req, res) => {
+  if(!requireParticipant(req, res)) return;
+  const rows = db.prepare("SELECT match_id, home, away FROM predictions_matches WHERE participant_id = ?").all(req.session.participantId);
+  const map = {};
+  rows.forEach(r => map[r.match_id] = { home: r.home, away: r.away });
+  sendJson(res, 200, map);
+});
+
+router.put("/api/predictions/matches/:matchId", async (req, res, params) => {
+  if(!requireParticipant(req, res)) return;
+  const { matchId } = params;
+  const body = await readJsonBody(req);
+  const valid = MATCHES.some(m => m.id === matchId);
+  if(!valid) return sendJson(res, 400, { error: "Partita non valida" });
+  const h = body.home === "" || body.home === null || body.home === undefined ? null : Math.max(0, Math.min(20, parseInt(body.home, 10)));
+  const a = body.away === "" || body.away === null || body.away === undefined ? null : Math.max(0, Math.min(20, parseInt(body.away, 10)));
+  db.prepare(`
+    INSERT INTO predictions_matches (participant_id, match_id, home, away)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(participant_id, match_id) DO UPDATE SET home = excluded.home, away = excluded.away
+  `).run(req.session.participantId, matchId, h, a);
+  sendJson(res, 200, { ok: true });
+});
+
+// ---- PRONOSTICI: ORDINE GIRONI ----
+router.get("/api/predictions/group-order", async (req, res) => {
+  if(!requireParticipant(req, res)) return;
+  const rows = db.prepare("SELECT group_letter, pos, team FROM predictions_group_order WHERE participant_id = ?").all(req.session.participantId);
+  const map = {};
+  rows.forEach(r => {
+    if(!map[r.group_letter]) map[r.group_letter] = [null, null, null, null];
+    map[r.group_letter][r.pos] = r.team;
+  });
+  sendJson(res, 200, map);
+});
+
+router.put("/api/predictions/group-order/:group/:pos", async (req, res, params) => {
+  if(!requireParticipant(req, res)) return;
+  const group = params.group.toUpperCase();
+  const pos = parseInt(params.pos, 10);
+  const body = await readJsonBody(req);
+  if(!GROUPS[group] || pos < 0 || pos > 3) return sendJson(res, 400, { error: "Girone o posizione non validi" });
+  if(body.team && !GROUPS[group].includes(body.team)) return sendJson(res, 400, { error: "Squadra non presente in questo girone" });
+  db.prepare(`
+    INSERT INTO predictions_group_order (participant_id, group_letter, pos, team)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(participant_id, group_letter, pos) DO UPDATE SET team = excluded.team
+  `).run(req.session.participantId, group, pos, body.team || null);
+  sendJson(res, 200, { ok: true });
+});
+
+// ---- PRONOSTICI: PREMI ----
+router.get("/api/predictions/awards", async (req, res) => {
+  if(!requireParticipant(req, res)) return;
+  const row = db.prepare("SELECT * FROM predictions_awards WHERE participant_id = ?").get(req.session.participantId);
+  sendJson(res, 200, row || {});
+});
+
+router.put("/api/predictions/awards", async (req, res) => {
+  if(!requireParticipant(req, res)) return;
+  const body = await readJsonBody(req);
+  db.prepare(`
+    INSERT INTO predictions_awards (participant_id, winner, top_scorer, most_goals_team, best_player, best_goalkeeper)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(participant_id) DO UPDATE SET
+      winner = excluded.winner, top_scorer = excluded.top_scorer,
+      most_goals_team = excluded.most_goals_team, best_player = excluded.best_player,
+      best_goalkeeper = excluded.best_goalkeeper
+  `).run(req.session.participantId, body.winner || "", body.top_scorer || "", body.most_goals_team || "", body.best_player || "", body.best_goalkeeper || "");
+  sendJson(res, 200, { ok: true });
+});
+
+// ---- RISULTATI REALI (lettura pubblica, scrittura solo admin) ----
+router.get("/api/real/matches", async (req, res) => sendJson(res, 200, getRealMatches()));
+
+router.put("/api/admin/real/matches/:matchId", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const { matchId } = params;
+  const body = await readJsonBody(req);
+  const valid = MATCHES.some(m => m.id === matchId);
+  if(!valid) return sendJson(res, 400, { error: "Partita non valida" });
+  const h = body.home === "" || body.home === null || body.home === undefined ? null : Math.max(0, Math.min(20, parseInt(body.home, 10)));
+  const a = body.away === "" || body.away === null || body.away === undefined ? null : Math.max(0, Math.min(20, parseInt(body.away, 10)));
+  db.prepare(`
+    INSERT INTO real_matches (match_id, home, away, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(match_id) DO UPDATE SET home = excluded.home, away = excluded.away, updated_at = excluded.updated_at
+  `).run(matchId, h, a);
+  sendJson(res, 200, { ok: true });
+});
+
+router.get("/api/real/group-order", async (req, res) => sendJson(res, 200, getRealGroupOrder()));
+
+router.put("/api/admin/real/group-order/:group/:pos", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const group = params.group.toUpperCase();
+  const pos = parseInt(params.pos, 10);
+  const body = await readJsonBody(req);
+  if(!GROUPS[group] || pos < 0 || pos > 3) return sendJson(res, 400, { error: "Girone o posizione non validi" });
+  if(body.team && !GROUPS[group].includes(body.team)) return sendJson(res, 400, { error: "Squadra non presente in questo girone" });
+  db.prepare(`
+    INSERT INTO real_group_order (group_letter, pos, team)
+    VALUES (?, ?, ?)
+    ON CONFLICT(group_letter, pos) DO UPDATE SET team = excluded.team
+  `).run(group, pos, body.team || null);
+  sendJson(res, 200, { ok: true });
+});
+
+router.get("/api/real/awards", async (req, res) => sendJson(res, 200, getRealAwards()));
+
+router.put("/api/admin/real/awards", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  const body = await readJsonBody(req);
+  db.prepare(`
+    UPDATE real_awards SET winner=?, top_scorer=?, most_goals_team=?, best_player=?, best_goalkeeper=? WHERE id = 1
+  `).run(body.winner || "", body.top_scorer || "", body.most_goals_team || "", body.best_player || "", body.best_goalkeeper || "");
+  sendJson(res, 200, { ok: true });
+});
+
+// Calcolo automatico ordine girone dai risultati reali già inseriti (punti, diff reti, reti fatte)
+router.post("/api/admin/auto-group-order/:group", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const group = params.group.toUpperCase();
+  if(!GROUPS[group]) return sendJson(res, 400, { error: "Girone non valido" });
+  const teams = GROUPS[group];
+  const stats = {};
+  teams.forEach(t => stats[t] = { pts: 0, gf: 0, gs: 0, dr: 0 });
+
+  const groupMatches = MATCHES.filter(m => m.group === group);
+  const real = getRealMatches();
+  groupMatches.forEach(m => {
+    const r = real[m.id];
+    if(!r || r.home === null || r.away === null || r.home === undefined || r.away === undefined) return;
+    stats[m.home].gf += r.home; stats[m.home].gs += r.away;
+    stats[m.away].gf += r.away; stats[m.away].gs += r.home;
+    if(r.home > r.away) stats[m.home].pts += 3;
+    else if(r.home < r.away) stats[m.away].pts += 3;
+    else { stats[m.home].pts += 1; stats[m.away].pts += 1; }
+  });
+  teams.forEach(t => stats[t].dr = stats[t].gf - stats[t].gs);
+
+  const ordered = teams.slice().sort((a, b) => {
+    if(stats[b].pts !== stats[a].pts) return stats[b].pts - stats[a].pts;
+    if(stats[b].dr !== stats[a].dr) return stats[b].dr - stats[a].dr;
+    return stats[b].gf - stats[a].gf;
+  });
+
+  const stmt = db.prepare(`
+    INSERT INTO real_group_order (group_letter, pos, team) VALUES (?, ?, ?)
+    ON CONFLICT(group_letter, pos) DO UPDATE SET team = excluded.team
+  `);
+  ordered.forEach((team, pos) => stmt.run(group, pos, team));
+
+  sendJson(res, 200, { group, order: ordered, stats });
+});
+
+// ---- CLASSIFICA GENERALE ----
+router.get("/api/leaderboard", async (req, res) => sendJson(res, 200, computeLeaderboard()));
+
+// ============================================================
+// FILE STATICI
+// ============================================================
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon"
+};
+
+function tryServeStatic(req, res, pathname){
+  let filePath = path.join(PUBLIC_DIR, decodeURIComponent(pathname));
+  if(pathname === "/") filePath = path.join(PUBLIC_DIR, "index.html");
+  if(!filePath.startsWith(PUBLIC_DIR)) return false; // path traversal guard
+  if(!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) return false;
+  const ext = path.extname(filePath);
+  res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream" });
+  fs.createReadStream(filePath).pipe(res);
+  return true;
+}
+
+// ============================================================
+// SERVER HTTP
+// ============================================================
+const server = http.createServer(async (req, res) => {
+  const parsed = url.parse(req.url, true);
+  const pathname = parsed.pathname;
+
+  sessionMiddleware(req, res);
+  applySessionCookie(req, res);
+
+  if(pathname.startsWith("/api/")){
+    const match = router.match(req.method, pathname);
+    if(!match){
+      sendJson(res, 404, { error: "Rotta API non trovata" });
+      return;
+    }
+    try{
+      await match.handler(req, res, match.params);
+    }catch(err){
+      console.error("Errore interno:", err);
+      sendJson(res, 500, { error: "Errore interno del server" });
+    }
+    return;
+  }
+
+  if(tryServeStatic(req, res, pathname)) return;
+  tryServeStatic(req, res, "/index.html");
+});
+
+server.listen(PORT, () => {
+  console.log(`Tabellone Mondiale 2026 in ascolto su http://localhost:${PORT}`);
+  console.log(`Password admin di default: ${ADMIN_PASSWORD_DEFAULT} (cambiala con la variabile d'ambiente ADMIN_PASSWORD)`);
+});

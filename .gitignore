@@ -1,0 +1,6 @@
+node_modules/
+data/tabellone.db
+data/tabellone.db-shm
+data/tabellone.db-wal
+.env
+*.log

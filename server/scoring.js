@@ -1,6 +1,20 @@
 // ============================================================
-// SCORING — motore di calcolo punteggi, lato server (fonte di verità unica)
+// SCORING — motore di calcolo punteggi
+//
+// Tre colonne distinte in classifica:
+//
+// 1. punteggioPartite  — risultati esatti + 1X2, aggiornato dopo ogni partita
+//                        (SOLO fase a gironi per ora, si estende alla fase KO)
+//
+// 2. punteggioGironi   — pronostico classifica 1°/2°/3°/4° di ogni girone
+//                        → provvisorio finché l'admin non chiude i gironi
+//                        → definitivo (congelato) dopo la chiusura
+//
+// 3. totaleDefinitivo  — punteggioPartite + punteggioGironi (solo se chiusi)
+//                        + premi finali (solo se inseriti)
+//                        Questo è il punteggio "ufficiale" che cresce fase per fase
 // ============================================================
+
 const { db } = require("./db");
 const { MATCHES, GROUPS, POINTS, pointsForGroupPosition } = require("./data");
 
@@ -36,75 +50,162 @@ function getRealAwards(){
   return db.prepare("SELECT * FROM real_awards WHERE id = 1").get() || {};
 }
 
-function computeScoreForParticipant(participantId, numParticipants, realMatches, realGroupOrder, realAwards){
-  const breakdown = {
-    risultatoEsatto: 0, segno1x2: 0, posizioniGironi: 0,
-    vincitoreMondiale: 0, capocannoniere: 0, squadraPiuReti: 0,
-    migliorGiocatore: 0, miglierPortiere: 0
-  };
+function isGroupPhaseLocked(){
+  const row = db.prepare("SELECT group_phase_locked FROM admin_settings WHERE id = 1").get();
+  return row ? (row.group_phase_locked === 1 || row.group_phase_locked === true) : false;
+}
 
-  const predMatches = db.prepare("SELECT * FROM predictions_matches WHERE participant_id = ?").all(participantId);
-  const predMatchMap = {};
-  predMatches.forEach(r => predMatchMap[r.match_id] = { home: r.home, away: r.away });
+// ------------------------------------------------------------
+// Calcola i punti delle partite (risultato esatto / 1X2)
+// Solo partite dei gironi (MATCHES) per ora
+// ------------------------------------------------------------
+function calcPunteggioPartite(participantId, realMatches){
+  let risultatoEsatto = 0;
+  let segno1x2 = 0;
+
+  const predRows = db.prepare(
+    "SELECT match_id, home, away FROM predictions_matches WHERE participant_id = ?"
+  ).all(participantId);
+  const predMap = {};
+  predRows.forEach(r => predMap[r.match_id] = { home: r.home, away: r.away });
 
   MATCHES.forEach(m => {
     const real = realMatches[m.id];
-    const guess = predMatchMap[m.id];
-    if(!real || real.home === null || real.home === undefined || real.away === null || real.away === undefined) return;
-    if(!guess || guess.home === null || guess.home === undefined || guess.away === null || guess.away === undefined) return;
+    const guess = predMap[m.id];
+    if(!real || real.home === null || real.home === undefined ||
+       real.away === null || real.away === undefined) return;
+    if(!guess || guess.home === null || guess.home === undefined ||
+       guess.away === null || guess.away === undefined) return;
 
-    if(guess.home === real.home && guess.away === real.away){
-      breakdown.risultatoEsatto += POINTS.exactScore;
+    if(Number(guess.home) === Number(real.home) && Number(guess.away) === Number(real.away)){
+      risultatoEsatto += POINTS.exactScore;
     } else {
-      const realSign = calcSign(real.home, real.away);
-      const guessSign = calcSign(guess.home, guess.away);
+      const realSign = calcSign(Number(real.home), Number(real.away));
+      const guessSign = calcSign(Number(guess.home), Number(guess.away));
       if(realSign && guessSign && realSign === guessSign){
-        breakdown.segno1x2 += POINTS.result1x2;
+        segno1x2 += POINTS.result1x2;
       }
     }
   });
 
+  return { risultatoEsatto, segno1x2, totale: risultatoEsatto + segno1x2 };
+}
+
+// ------------------------------------------------------------
+// Calcola i punti dei gironi (pronostico classifica)
+// Restituisce anche il flag "definitivo" (se i gironi sono chiusi)
+// ------------------------------------------------------------
+function calcPunteggioGironi(participantId, numParticipants, realGroupOrder){
   const perPos = pointsForGroupPosition(numParticipants);
-  const predGroupRows = db.prepare("SELECT * FROM predictions_group_order WHERE participant_id = ?").all(participantId);
-  const predGroupMap = {};
-  predGroupRows.forEach(r => {
-    if(!predGroupMap[r.group_letter]) predGroupMap[r.group_letter] = [null, null, null, null];
-    predGroupMap[r.group_letter][r.pos] = r.team;
+  let punti = 0;
+
+  const predRows = db.prepare(
+    "SELECT group_letter, pos, team FROM predictions_group_order WHERE participant_id = ?"
+  ).all(participantId);
+  const predMap = {};
+  predRows.forEach(r => {
+    if(!predMap[r.group_letter]) predMap[r.group_letter] = [null, null, null, null];
+    predMap[r.group_letter][r.pos] = r.team;
   });
+
   Object.keys(GROUPS).forEach(g => {
     const real = realGroupOrder[g];
-    const guess = predGroupMap[g];
+    const guess = predMap[g];
     if(!real || !guess) return;
-    for(let i=0;i<4;i++){
-      if(real[i] && guess[i] && real[i] === guess[i]) breakdown.posizioniGironi += perPos;
+    for(let i = 0; i < 4; i++){
+      if(real[i] && guess[i] && real[i] === guess[i]) punti += perPos;
     }
   });
 
-  const pa = db.prepare("SELECT * FROM predictions_awards WHERE participant_id = ?").get(participantId) || {};
-  const ra = realAwards;
-  if(ra.winner && pa.winner && ra.winner === pa.winner) breakdown.vincitoreMondiale += POINTS.winner;
-  if(ra.top_scorer && pa.top_scorer && normalizeName(ra.top_scorer) === normalizeName(pa.top_scorer)) breakdown.capocannoniere += POINTS.topScorer;
-  if(ra.most_goals_team && pa.most_goals_team && ra.most_goals_team === pa.most_goals_team) breakdown.squadraPiuReti += POINTS.mostGoalsTeamGroups;
-  if(ra.best_player && pa.best_player && normalizeName(ra.best_player) === normalizeName(pa.best_player)) breakdown.migliorGiocatore += POINTS.bestPlayer;
-  if(ra.best_goalkeeper && pa.best_goalkeeper && normalizeName(ra.best_goalkeeper) === normalizeName(pa.best_goalkeeper)) breakdown.miglierPortiere += POINTS.bestGoalkeeper;
-
-  const total = Object.values(breakdown).reduce((a,b)=>a+b, 0);
-  return { total, breakdown };
+  return punti;
 }
 
+// ------------------------------------------------------------
+// Calcola i punti dei premi finali
+// ------------------------------------------------------------
+function calcPunteggioPremi(participantId, realAwards){
+  const pa = db.prepare(
+    "SELECT * FROM predictions_awards WHERE participant_id = ?"
+  ).get(participantId) || {};
+  const ra = realAwards;
+  let punti = 0;
+
+  if(ra.winner && pa.winner && ra.winner === pa.winner)
+    punti += POINTS.winner;
+  if(ra.top_scorer && pa.top_scorer &&
+     normalizeName(ra.top_scorer) === normalizeName(pa.top_scorer))
+    punti += POINTS.topScorer;
+  if(ra.most_goals_team && pa.most_goals_team && ra.most_goals_team === pa.most_goals_team)
+    punti += POINTS.mostGoalsTeamGroups;
+  if(ra.best_player && pa.best_player &&
+     normalizeName(ra.best_player) === normalizeName(pa.best_player))
+    punti += POINTS.bestPlayer;
+  if(ra.best_goalkeeper && pa.best_goalkeeper &&
+     normalizeName(ra.best_goalkeeper) === normalizeName(pa.best_goalkeeper))
+    punti += POINTS.bestGoalkeeper;
+
+  return punti;
+}
+
+// ------------------------------------------------------------
+// Calcola la classifica completa con le tre colonne
+// ------------------------------------------------------------
 function computeLeaderboard(){
   const participants = db.prepare("SELECT * FROM participants ORDER BY id").all();
   const numParticipants = participants.length;
   const realMatches = getRealMatches();
   const realGroupOrder = getRealGroupOrder();
   const realAwards = getRealAwards();
+  const groupsLocked = isGroupPhaseLocked();
 
   const board = participants.map(p => {
-    const { total, breakdown } = computeScoreForParticipant(p.id, numParticipants, realMatches, realGroupOrder, realAwards);
-    return { id: p.id, name: p.name, team: p.team, total, breakdown };
+    const partite = calcPunteggioPartite(p.id, realMatches);
+    const gironi  = calcPunteggioGironi(p.id, numParticipants, realGroupOrder);
+    const premi   = calcPunteggioPremi(p.id, realAwards);
+
+    // Totale provvisorio = solo partite (aggiornato in tempo reale)
+    const totaleProvvisorio = partite.totale;
+
+    // Totale definitivo = partite + gironi (solo se chiusi) + premi
+    const totaleDefinitivo = partite.totale
+      + (groupsLocked ? gironi : 0)
+      + premi;
+
+    return {
+      id: p.id,
+      name: p.name,
+      team: p.team,
+      // Colonne visibili in classifica
+      totaleProvvisorio,        // esatti + 1X2 (aggiornato in tempo reale)
+      totalePartite: partite.totale, // alias esplicito = esatti + 1X2
+      punteggioGironi: gironi,
+      gironiDefinitivi: groupsLocked,
+      totaleDefinitivo,
+      // Breakdown dettagliato
+      breakdown: {
+        risultatoEsatto: partite.risultatoEsatto,
+        segno1x2: partite.segno1x2,
+        gironi,
+        premi
+      }
+    };
   });
-  board.sort((a,b) => b.total - a.total);
-  return board;
+
+  // Ordina per totaleDefinitivo, poi per totaleProvvisorio come spareggio
+  board.sort((a, b) =>
+    b.totaleDefinitivo !== a.totaleDefinitivo
+      ? b.totaleDefinitivo - a.totaleDefinitivo
+      : b.totaleProvvisorio - a.totaleProvvisorio
+  );
+
+  return { board, groupsLocked };
 }
 
-module.exports = { computeLeaderboard, computeScoreForParticipant, getRealMatches, getRealGroupOrder, getRealAwards, normalizeName };
+module.exports = {
+  computeLeaderboard,
+  getRealMatches,
+  getRealGroupOrder,
+  getRealAwards,
+  isGroupPhaseLocked,
+  normalizeName
+};

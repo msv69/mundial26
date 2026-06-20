@@ -54,6 +54,41 @@ function requireAdmin(req, res){
   return true;
 }
 
+// Blocco temporale pronostici:
+// Giornate 1+2 → bloccate dopo il 16/6/2026 ore 17:00 (2h prima della prima partita G2 del 16/6)
+// Giornata 3   → bloccata dopo il 23/6/2026 ore 17:00 (2h prima della prima partita G3 del 23/6)
+const LOCK_G1G2 = new Date("2026-06-16T17:00:00+02:00");
+const LOCK_G3   = new Date("2026-06-23T17:00:00+02:00");
+
+// Mappa match_id → giornata (1, 2 o 3)
+const MATCH_ROUND = {};
+const { MATCHES: _ALL_MATCHES } = require("./data");
+_ALL_MATCHES.forEach(m => {
+  // Le partite con id che finiscono in 1,2 = giornata 1; 3,4 = giornata 2; 5,6 = giornata 3
+  const n = parseInt(m.id.slice(-1));
+  MATCH_ROUND[m.id] = n <= 2 ? 1 : n <= 4 ? 2 : 3;
+});
+
+function isMatchLocked(matchId){
+  const now = new Date();
+  const round = MATCH_ROUND[matchId];
+  if(round === 1 || round === 2) return now >= LOCK_G1G2;
+  if(round === 3) return now >= LOCK_G3;
+  return false;
+}
+
+// Restituisce lo stato di blocco per ogni partita (usato dal frontend per colorare in rosso)
+function getMatchLockStatus(){
+  const now = new Date();
+  const status = {};
+  _ALL_MATCHES.forEach(m => {
+    const round = MATCH_ROUND[m.id];
+    const lockTime = (round === 1 || round === 2) ? LOCK_G1G2 : LOCK_G3;
+    status[m.id] = { locked: now >= lockTime, lockTime: lockTime.toISOString() };
+  });
+  return status;
+}
+
 // ============================================================
 // ROUTER — definizione di tutte le rotte API
 // ============================================================
@@ -156,6 +191,7 @@ router.put("/api/predictions/matches/:matchId", async (req, res, params) => {
   const body = await readJsonBody(req);
   const valid = MATCHES.some(m => m.id === matchId);
   if(!valid) return sendJson(res, 400, { error: "Partita non valida" });
+  if(isMatchLocked(matchId)) return sendJson(res, 403, { error: "Pronostico bloccato: il termine per questa partita è scaduto" });
   const h = body.home === "" || body.home === null || body.home === undefined ? null : Math.max(0, Math.min(20, parseInt(body.home, 10)));
   const a = body.away === "" || body.away === null || body.away === undefined ? null : Math.max(0, Math.min(20, parseInt(body.away, 10)));
   db.prepare(`
@@ -296,6 +332,72 @@ router.post("/api/admin/auto-group-order/:group", async (req, res, params) => {
   ordered.forEach((team, pos) => stmt.run(group, pos, team));
 
   sendJson(res, 200, { group, order: ordered, stats });
+});
+
+// ---- BLOCCO/SBLOCCO FASE A GIRONI ----
+router.get("/api/admin/group-phase-status", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  const row = db.prepare("SELECT group_phase_locked FROM admin_settings WHERE id = 1").get();
+  sendJson(res, 200, { locked: row ? (row.group_phase_locked === 1) : false });
+});
+
+router.post("/api/admin/group-phase-lock", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  db.prepare("UPDATE admin_settings SET group_phase_locked = 1 WHERE id = 1").run();
+  sendJson(res, 200, { locked: true });
+});
+
+router.post("/api/admin/group-phase-unlock", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  db.prepare("UPDATE admin_settings SET group_phase_locked = 0 WHERE id = 1").run();
+  sendJson(res, 200, { locked: false });
+});
+
+// ---- STATO BLOCCO PARTITE (pubblico, usato dal frontend per colorare i campi bloccati) ----
+router.get("/api/predictions/lock-status", async (req, res) => {
+  sendJson(res, 200, getMatchLockStatus());
+});
+
+// ---- PRONOSTICI DI TUTTI I CONCORRENTI (solo admin) ----
+router.get("/api/admin/all-predictions/matches", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const allMatches = db.prepare("SELECT * FROM predictions_matches").all();
+  const byParticipant = {};
+  participants.forEach(p => { byParticipant[p.id] = { participant: p, matches: {} }; });
+  allMatches.forEach(r => {
+    if(byParticipant[r.participant_id])
+      byParticipant[r.participant_id].matches[r.match_id] = { home: r.home, away: r.away };
+  });
+  sendJson(res, 200, { participants, predictions: byParticipant });
+});
+
+router.get("/api/admin/all-predictions/groups", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const allGroups = db.prepare("SELECT * FROM predictions_group_order").all();
+  const byParticipant = {};
+  participants.forEach(p => { byParticipant[p.id] = { participant: p, groups: {} }; });
+  allGroups.forEach(r => {
+    if(!byParticipant[r.participant_id]) return;
+    if(!byParticipant[r.participant_id].groups[r.group_letter])
+      byParticipant[r.participant_id].groups[r.group_letter] = [null,null,null,null];
+    byParticipant[r.participant_id].groups[r.group_letter][r.pos] = r.team;
+  });
+  sendJson(res, 200, { participants, predictions: byParticipant });
+});
+
+router.get("/api/admin/all-predictions/awards", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const allAwards = db.prepare("SELECT * FROM predictions_awards").all();
+  const byParticipant = {};
+  participants.forEach(p => { byParticipant[p.id] = { participant: p, awards: {} }; });
+  allAwards.forEach(r => {
+    if(byParticipant[r.participant_id])
+      byParticipant[r.participant_id].awards = r;
+  });
+  sendJson(res, 200, { participants, predictions: byParticipant });
 });
 
 // ---- CLASSIFICA GENERALE ----

@@ -80,6 +80,9 @@ function init(){
     );
   `);
 
+  // Migration sicura: aggiunge group_phase_locked se non esiste (compatibile con DB già esistenti)
+  try { db.exec("ALTER TABLE admin_settings ADD COLUMN group_phase_locked INTEGER DEFAULT 0"); } catch(e) {}
+
   // Seed: garantisce riga unica per real_awards
   const ra = db.prepare("SELECT id FROM real_awards WHERE id = 1").get();
   if(!ra) db.prepare("INSERT INTO real_awards (id) VALUES (1)").run();

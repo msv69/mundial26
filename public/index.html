@@ -557,6 +557,37 @@ tr:hover td{ background: rgba(255,255,255,0.03); }
 .sync-pill.error .dot{ background: var(--red-card); }
 .access-code-cell{ font-family:'Space Mono', monospace; letter-spacing:2px; color: var(--gold-bright); }
 .me-row{ background: rgba(247, 197, 72, 0.12) !important; }
+.provvisorio-col{ color: var(--gold-bright); }
+.gironi-col{ color: var(--chalk-dim); }
+.gironi-col b{ color: var(--chalk); }
+.leaderboard-table .total-col{ color: var(--gold-bright); font-size: 15px; }
+.partite-col{ color: var(--chalk); }
+
+/* Campi bloccati */
+.input-locked{ border-color: #ff8a7a !important; color: #ff8a7a !important; background: rgba(255,100,80,0.08) !important; cursor: not-allowed; }
+.match-locked .match-meta{ color: #ff8a7a; }
+.lock-badge{ font-size: 10px; }
+.row-locked{ opacity: 0.75; }
+
+/* Tabellone admin */
+.tabellone-scroll{ overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tabellone-table{ border-collapse: collapse; font-size: 11px; min-width: 800px; width: 100%; }
+.tabellone-table th, .tabellone-table td{
+  border: 1px solid var(--line); padding: 4px 6px; white-space: nowrap;
+  text-align: center; vertical-align: middle;
+}
+.tabellone-table th{ background: rgba(255,255,255,0.06); font-family:'Oswald',sans-serif; font-size:11px; letter-spacing:0.3px; position: sticky; top: 0; }
+.tabellone-match-col{ text-align:left !important; min-width:130px; max-width:160px; white-space:normal !important; }
+.tabellone-real-col{ min-width:52px; background: rgba(247,197,72,0.07); }
+.tabellone-p-col{ min-width:56px; }
+.tabellone-group-row td{ background: rgba(255,255,255,0.04); font-family:'Oswald',sans-serif; font-size:11px; letter-spacing:0.5px; color:var(--gold-bright); text-align:left !important; padding: 6px 8px; }
+.match-label{ display:block; font-weight:600; font-size:11px; }
+.match-date-small{ display:block; font-size:10px; color:var(--chalk-dim); }
+.pred-score{ display:inline-block; padding:1px 5px; border-radius:3px; font-family:'Space Mono',monospace; }
+.pred-exact{ background: rgba(100,220,120,0.25); color: #7fd99a; font-weight:700; }
+.pred-sign{ background: rgba(247,197,72,0.18); color: var(--gold-bright); }
+.real-score{ font-family:'Space Mono',monospace; font-weight:700; color: var(--gold-bright); }
+.no-data{ color: var(--chalk-dim); font-size:10px; }
 .me-row td{ position: relative; }
 .me-row td:first-child::before{ content:"★ "; color: var(--gold-bright); }
 </style>

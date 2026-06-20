@@ -179,6 +179,7 @@ const PARTICIPANT_TABS = [
 const ADMIN_TABS = [
   {id:"admin-concorrenti", label:"Concorrenti & codici"},
   {id:"admin-risultati", label:"Risultati reali"},
+  {id:"admin-tabellone", label:"Tabellone pronostici"},
   {id:"classifica", label:"Classifica generale"},
   {id:"regolamento", label:"Regolamento"}
 ];
@@ -215,6 +216,7 @@ function renderPanels(){
   else if(activeTab==="regolamento") renderRegolamento(el);
   else if(activeTab==="admin-concorrenti") renderAdminConcorrenti(el);
   else if(activeTab==="admin-risultati") renderRisultatiAdmin(el);
+  else if(activeTab==="admin-tabellone") renderAdminTabellone(el);
 }
 
 // ============================================================
@@ -222,9 +224,12 @@ function renderPanels(){
 // ============================================================
 async function renderPronostici(el){
   el.innerHTML = `<div class="loading-msg">Carico i tuoi pronostici…</div>`;
-  let saved;
+  let saved, lockStatus;
   try{
-    saved = await apiGet("/predictions/matches");
+    [saved, lockStatus] = await Promise.all([
+      apiGet("/predictions/matches"),
+      apiGet("/predictions/lock-status")
+    ]);
   }catch(e){
     el.innerHTML = `<div class="empty-state">Errore nel caricamento: ${escapeHtml(e.message)}</div>`;
     return;
@@ -232,7 +237,7 @@ async function renderPronostici(el){
 
   el.innerHTML = `
     <div class="section-title">Pronostici sulle singole partite <span class="tag">72 partite</span></div>
-    <p class="section-desc">Inserisci il risultato esatto che pronostichi per ogni partita della fase a gironi. Dal risultato verrà ricavato anche l'esito 1X2 per il punteggio. Si salva automaticamente a ogni modifica.</p>
+    <p class="section-desc">Inserisci il risultato esatto che pronostichi per ogni partita. I campi in <span style="color:#ff8a7a">rosso</span> sono bloccati perché il termine è scaduto.</p>
   `;
 
   const matchesByGroup = {};
@@ -250,15 +255,18 @@ async function renderPronostici(el){
     groupWrap.innerHTML = `<div class="matchday-label">Girone ${g} — ${TOURNAMENT.groups[g].join(" · ")}</div>`;
     matchesByGroup[g].forEach(m=>{
       const s = saved[m.id] || {};
+      const locked = lockStatus[m.id] && lockStatus[m.id].locked;
       const row = document.createElement("div");
-      row.className = "match-row";
+      row.className = "match-row" + (locked ? " match-locked" : "");
       row.innerHTML = `
-        <div class="match-meta">${m.date}</div>
+        <div class="match-meta">${m.date}${locked ? ' <span class="lock-badge">🔒</span>' : ''}</div>
         <div class="match-team">${m.home}</div>
         <div class="score-inputs">
-          <input type="number" min="0" max="20" data-match="${m.id}" data-side="home" value="${s.home ?? ''}">
+          <input type="number" min="0" max="20" data-match="${m.id}" data-side="home"
+            value="${s.home ?? ''}" ${locked ? "disabled" : ""} class="${locked ? 'input-locked' : ''}">
           <span class="score-sep">–</span>
-          <input type="number" min="0" max="20" data-match="${m.id}" data-side="away" value="${s.away ?? ''}">
+          <input type="number" min="0" max="20" data-match="${m.id}" data-side="away"
+            value="${s.away ?? ''}" ${locked ? "disabled" : ""} class="${locked ? 'input-locked' : ''}">
         </div>
         <div class="match-team right">${m.away}</div>
         <div></div>
@@ -270,9 +278,14 @@ async function renderPronostici(el){
 
   el.appendChild(container);
 
-  container.querySelectorAll("input[type=number]").forEach(inp=>{
+  container.querySelectorAll("input[type=number]:not([disabled])").forEach(inp=>{
     inp.addEventListener("change", async ()=>{
       const matchId = inp.dataset.match;
+      // Ricontrolla lato client (il server blocca comunque lato server)
+      if(lockStatus[matchId] && lockStatus[matchId].locked){
+        showToast("Pronostico bloccato: il termine è scaduto", true);
+        return;
+      }
       const homeInp = container.querySelector(`input[data-match="${matchId}"][data-side="home"]`);
       const awayInp = container.querySelector(`input[data-match="${matchId}"][data-side="away"]`);
       pulseSync("saving");
@@ -284,7 +297,7 @@ async function renderPronostici(el){
         pulseSync("ok");
       }catch(e){
         pulseSync("error");
-        showToast("Errore salvataggio: " + e.message, true);
+        showToast("Errore: " + e.message, true);
       }
     });
   });
@@ -487,9 +500,30 @@ async function renderAdminConcorrenti(el){
 let adminResultsSubTab = "partite"; // 'partite' | 'gironi' | 'premi'
 
 async function renderRisultatiAdmin(el){
+  // Recupera stato gironi
+  let groupStatus = { locked: false };
+  try{ groupStatus = await apiGet("/admin/group-phase-status"); }catch(e){}
+
+  const lockBtn = groupStatus.locked
+    ? `<button class="btn-ghost" id="unlock-groups-btn" style="border-color:var(--gold);color:var(--gold)">🔓 Riapri fase a gironi</button>`
+    : `<button class="btn-primary" id="lock-groups-btn">🔒 Chiudi fase a gironi (rendi definitivi i punti gironi)</button>`;
+
   el.innerHTML = `
     <div class="section-title">Inserimento risultati reali</div>
     <p class="section-desc">Inserisci qui i risultati ufficiali non appena disponibili. Non esiste un collegamento automatico al sito FIFA (nessuna API gratuita disponibile), ma per i gironi puoi calcolare l'ordine automaticamente dai risultati delle partite invece di inserirlo a mano.</p>
+
+    <div class="card" style="margin-bottom:18px;padding:16px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+      <div>
+        <b style="font-family:'Oswald',sans-serif;letter-spacing:0.5px">FASE A GIRONI</b>
+        <span style="margin-left:10px;font-size:12px;color:var(--chalk-dim)">
+          ${groupStatus.locked
+            ? '✅ Chiusa — punti gironi definitivi'
+            : '⏳ Aperta — punti gironi provvisori'}
+        </span>
+      </div>
+      ${lockBtn}
+    </div>
+
     <div class="subtabs">
       <button class="subtab-btn ${adminResultsSubTab==='partite'?'active':''}" data-sub="partite">Risultati partite</button>
       <button class="subtab-btn ${adminResultsSubTab==='gironi'?'active':''}" data-sub="gironi">Classifica gironi</button>
@@ -497,6 +531,26 @@ async function renderRisultatiAdmin(el){
     </div>
     <div id="admin-results-content"></div>
   `;
+
+  // Handler pulsante blocco/sblocco
+  const lockBtnEl = el.querySelector("#lock-groups-btn");
+  const unlockBtnEl = el.querySelector("#unlock-groups-btn");
+  if(lockBtnEl) lockBtnEl.addEventListener("click", async () => {
+    if(!confirm("Chiudere la fase a gironi? I punti gironi diventeranno definitivi per tutti i concorrenti. Potrai riaprirla se necessario.")) return;
+    try{
+      await apiPost("/admin/group-phase-lock", {});
+      showToast("Fase a gironi chiusa — punti gironi ora definitivi");
+      renderRisultatiAdmin(el);
+    }catch(e){ showToast("Errore: " + e.message, true); }
+  });
+  if(unlockBtnEl) unlockBtnEl.addEventListener("click", async () => {
+    if(!confirm("Riaprire la fase a gironi? I punti gironi torneranno provvisori.")) return;
+    try{
+      await apiPost("/admin/group-phase-unlock", {});
+      showToast("Fase a gironi riaperta — punti gironi di nuovo provvisori");
+      renderRisultatiAdmin(el);
+    }catch(e){ showToast("Errore: " + e.message, true); }
+  });
   el.querySelectorAll(".subtab-btn").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       adminResultsSubTab = btn.dataset.sub;
@@ -684,15 +738,26 @@ async function renderAdminRisultatiPremi(el){
 // ============================================================
 async function renderClassificaGenerale(el){
   el.innerHTML = `<div class="loading-msg">Calcolo la classifica…</div>`;
-  let board;
+  let data;
   try{
-    board = await apiGet("/leaderboard");
+    data = await apiGet("/leaderboard");
   }catch(e){
     el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
     return;
   }
 
-  el.innerHTML = `<div class="section-title">Classifica generale <span class="tag">${board.length} concorrenti</span></div>`;
+  const board = data.board;
+  const groupsLocked = data.groupsLocked;
+
+  const gironiLabel = groupsLocked ? "Gironi ✅" : "Gironi ⏳";
+  const totDefLabel = groupsLocked ? "Totale definitivo" : "Totale definitivo *";
+
+  el.innerHTML = `
+    <div class="section-title">Classifica generale <span class="tag">${board.length} concorrenti</span></div>
+    ${!groupsLocked
+      ? `<p class="section-desc" style="margin-bottom:12px;">⏳ Punti gironi <b>provvisori</b> — diventeranno definitivi a fine fase a gironi.</p>`
+      : `<p class="section-desc" style="margin-bottom:12px;">✅ Fase a gironi chiusa — punti gironi <b>definitivi</b>.</p>`}
+  `;
 
   const card = document.createElement("div");
   card.className = "card";
@@ -700,31 +765,45 @@ async function renderClassificaGenerale(el){
   table.className = "responsive-table leaderboard-table";
   table.innerHTML = `
     <thead><tr>
-      <th style="width:50px">Pos.</th><th>Concorrente</th><th>Squadra</th>
-      <th class="num">Risultati esatti</th><th class="num">Esiti 1X2</th><th class="num">Gironi</th>
-      <th class="num">Premi</th><th class="num total-col">Totale</th>
+      <th style="width:44px">Pos.</th>
+      <th>Concorrente</th>
+      <th class="num">Esatti</th>
+      <th class="num">1X2</th>
+      <th class="num partite-col">Tot. partite</th>
+      <th class="num provvisorio-col">Provvisorio</th>
+      <th class="num gironi-col">${gironiLabel}</th>
+      <th class="num total-col">${totDefLabel}</th>
     </tr></thead>
     <tbody></tbody>
   `;
   const tbody = table.querySelector("tbody");
   board.forEach((p, idx)=>{
-    const premiTotal = p.breakdown.vincitoreMondiale + p.breakdown.capocannoniere + p.breakdown.squadraPiuReti + p.breakdown.migliorGiocatore + p.breakdown.miglierPortiere;
     const tr = document.createElement("tr");
-    if(SESSION.type==="participant" && p.id === SESSION.id) tr.classList.add("me-row");
+    if(p.id === SESSION.id) tr.classList.add("me-row");
+    const gironiCell = groupsLocked
+      ? `<b>${p.punteggioGironi}</b>`
+      : `<span style="color:var(--chalk-dim)">${p.punteggioGironi}</span>`;
     tr.innerHTML = `
       <td data-label="Pos." class="num-mono">${idx+1}°</td>
-      <td data-label="Concorrente"><b>${escapeHtml(p.name)}</b></td>
-      <td data-label="Squadra">${escapeHtml(p.team || "—")}</td>
-      <td data-label="Risultati esatti" class="num">${p.breakdown.risultatoEsatto}</td>
-      <td data-label="Esiti 1X2" class="num">${p.breakdown.segno1x2}</td>
-      <td data-label="Gironi" class="num">${p.breakdown.posizioniGironi}</td>
-      <td data-label="Premi" class="num">${premiTotal}</td>
-      <td data-label="Totale" class="num total-col"><b>${p.total}</b></td>
+      <td data-label="Concorrente"><b>${escapeHtml(p.name)}</b>${p.team ? ` <span style="color:var(--chalk-dim);font-size:11px"> ${escapeHtml(p.team)}</span>` : ""}</td>
+      <td data-label="Esatti" class="num">${p.breakdown.risultatoEsatto}</td>
+      <td data-label="1X2" class="num">${p.breakdown.segno1x2}</td>
+      <td data-label="Tot. partite" class="num partite-col"><b>${p.totalePartite}</b></td>
+      <td data-label="Provvisorio" class="num provvisorio-col"><b>${p.totaleProvvisorio}</b></td>
+      <td data-label="${gironiLabel}" class="num gironi-col">${gironiCell}</td>
+      <td data-label="${totDefLabel}" class="num total-col"><b>${p.totaleDefinitivo}</b></td>
     `;
     tbody.appendChild(tr);
   });
   card.appendChild(table);
   el.appendChild(card);
+
+  if(!groupsLocked){
+    const note = document.createElement("p");
+    note.style.cssText = "font-size:11px;color:var(--chalk-dim);margin-top:8px;font-family:'Space Mono',monospace";
+    note.textContent = "* Totale definitivo esclude i gironi finché non vengono chiusi dall'admin.";
+    el.appendChild(note);
+  }
 }
 
 // ============================================================
@@ -799,3 +878,186 @@ async function boot(){
 }
 
 document.addEventListener("DOMContentLoaded", boot);
+
+// ============================================================
+// TAB ADMIN: TABELLONE PRONOSTICI — tutti i concorrenti affiancati
+// ============================================================
+let tabelloneSubTab = "partite"; // 'partite' | 'gironi' | 'premi'
+
+async function renderAdminTabellone(el){
+  el.innerHTML = `
+    <div class="section-title">Tabellone pronostici — tutti i concorrenti</div>
+    <div class="subtabs">
+      <button class="subtab-btn ${tabelloneSubTab==='partite'?'active':''}" data-sub="partite">Partite</button>
+      <button class="subtab-btn ${tabelloneSubTab==='gironi'?'active':''}" data-sub="gironi">Classifiche gironi</button>
+      <button class="subtab-btn ${tabelloneSubTab==='premi'?'active':''}" data-sub="premi">Premi finali</button>
+    </div>
+    <div id="tabellone-content"><div class="loading-msg">Carico…</div></div>
+  `;
+  el.querySelectorAll(".subtab-btn").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      tabelloneSubTab = btn.dataset.sub;
+      renderAdminTabellone(el);
+    });
+  });
+  const content = el.querySelector("#tabellone-content");
+  if(tabelloneSubTab === "partite") await renderTabellonePartite(content);
+  else if(tabelloneSubTab === "gironi") await renderTabelloneGironi(content);
+  else await renderTabellonePremi(content);
+}
+
+async function renderTabellonePartite(el){
+  let data, realData, lockStatus;
+  try{
+    [data, realData, lockStatus] = await Promise.all([
+      apiGet("/admin/all-predictions/matches"),
+      apiGet("/real/matches"),
+      apiGet("/predictions/lock-status")
+    ]);
+  }catch(e){
+    el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const { participants, predictions } = data;
+
+  // Raggruppa partite per girone
+  const matchesByGroup = {};
+  TOURNAMENT.matches.forEach(m=>{
+    if(!matchesByGroup[m.group]) matchesByGroup[m.group] = [];
+    matchesByGroup[m.group].push(m);
+  });
+
+  let html = `<div class="tabellone-scroll">`;
+  // Header concorrenti
+  html += `<table class="tabellone-table"><thead><tr>
+    <th class="tabellone-match-col">Partita</th>
+    <th class="tabellone-real-col">Reale</th>
+    ${participants.map(p=>`<th class="tabellone-p-col">${escapeHtml(p.name)}</th>`).join('')}
+  </tr></thead><tbody>`;
+
+  Object.keys(matchesByGroup).sort().forEach(g=>{
+    // Riga intestazione girone
+    html += `<tr class="tabellone-group-row"><td colspan="${participants.length+2}">Girone ${g} — ${TOURNAMENT.groups[g].join(' · ')}</td></tr>`;
+    matchesByGroup[g].forEach(m=>{
+      const real = realData[m.id];
+      const realStr = (real && real.home !== null && real.away !== null)
+        ? `<span class="real-score">${real.home}-${real.away}</span>` : `<span class="no-data">—</span>`;
+      const locked = lockStatus[m.id] && lockStatus[m.id].locked;
+      html += `<tr class="${locked ? 'row-locked' : ''}">
+        <td class="tabellone-match-col"><span class="match-label">${m.home} vs ${m.away}</span><span class="match-date-small">${m.date}</span></td>
+        <td class="tabellone-real-col">${realStr}</td>`;
+      participants.forEach(p=>{
+        const pred = predictions[p.id] && predictions[p.id].matches[m.id];
+        let cell = `<span class="no-data">—</span>`;
+        if(pred && pred.home !== null && pred.away !== null){
+          const isExact = real && real.home !== null && Number(pred.home)===Number(real.home) && Number(pred.away)===Number(real.away);
+          const real1x2 = real ? (real.home>real.away?'1':real.home<real.away?'2':'X') : null;
+          const pred1x2 = pred.home>pred.away?'1':pred.home<pred.away?'2':'X';
+          const isSign = real && !isExact && real1x2 && real1x2===pred1x2;
+          const cls = isExact ? 'pred-exact' : isSign ? 'pred-sign' : '';
+          cell = `<span class="pred-score ${cls}">${pred.home}-${pred.away}</span>`;
+        }
+        html += `<td class="tabellone-p-col">${cell}</td>`;
+      });
+      html += `</tr>`;
+    });
+  });
+
+  html += `</tbody></table></div>`;
+  html += `<p style="font-size:11px;color:var(--chalk-dim);margin-top:8px;font-family:'Space Mono',monospace">
+    <span class="pred-score pred-exact">2-1</span> = risultato esatto (+5pt) &nbsp;
+    <span class="pred-score pred-sign">2-1</span> = esito 1X2 corretto (+2pt)
+  </p>`;
+  el.innerHTML = html;
+}
+
+async function renderTabelloneGironi(el){
+  let data, realData;
+  try{
+    [data, realData] = await Promise.all([
+      apiGet("/admin/all-predictions/groups"),
+      apiGet("/real/group-order")
+    ]);
+  }catch(e){
+    el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const { participants, predictions } = data;
+
+  let html = `<div class="tabellone-scroll"><table class="tabellone-table"><thead><tr>
+    <th class="tabellone-match-col">Girone / Pos.</th>
+    <th class="tabellone-real-col">Reale</th>
+    ${participants.map(p=>`<th class="tabellone-p-col">${escapeHtml(p.name)}</th>`).join('')}
+  </tr></thead><tbody>`;
+
+  Object.keys(TOURNAMENT.groups).sort().forEach(g=>{
+    html += `<tr class="tabellone-group-row"><td colspan="${participants.length+2}">Girone ${g}</td></tr>`;
+    for(let pos=0; pos<4; pos++){
+      const realTeam = realData[g] && realData[g][pos];
+      const realCell = realTeam ? `<span class="real-score" style="font-size:11px">${realTeam}</span>` : `<span class="no-data">—</span>`;
+      html += `<tr><td class="tabellone-match-col">${pos+1}° posto</td><td class="tabellone-real-col">${realCell}</td>`;
+      participants.forEach(p=>{
+        const pGroups = predictions[p.id] && predictions[p.id].groups[g];
+        const predTeam = pGroups && pGroups[pos];
+        let cell = `<span class="no-data">—</span>`;
+        if(predTeam){
+          const isCorrect = realTeam && realTeam === predTeam;
+          cell = `<span class="pred-score ${isCorrect?'pred-exact':''}" style="font-size:10px">${predTeam}</span>`;
+        }
+        html += `<td class="tabellone-p-col">${cell}</td>`;
+      });
+      html += `</tr>`;
+    }
+  });
+
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+}
+
+async function renderTabellonePremi(el){
+  let data, realData;
+  try{
+    [data, realData] = await Promise.all([
+      apiGet("/admin/all-predictions/awards"),
+      apiGet("/real/awards")
+    ]);
+  }catch(e){
+    el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const { participants, predictions } = data;
+
+  const awardFields = [
+    {field:"winner", label:"🏆 Vincitore"},
+    {field:"top_scorer", label:"⚽ Capocannoniere"},
+    {field:"most_goals_team", label:"🥅 Squadra più gol"},
+    {field:"best_player", label:"⭐ Miglior giocatore"},
+    {field:"best_goalkeeper", label:"🧤 Miglior portiere"}
+  ];
+
+  let html = `<div class="tabellone-scroll"><table class="tabellone-table"><thead><tr>
+    <th class="tabellone-match-col">Premio</th>
+    <th class="tabellone-real-col">Reale</th>
+    ${participants.map(p=>`<th class="tabellone-p-col">${escapeHtml(p.name)}</th>`).join('')}
+  </tr></thead><tbody>`;
+
+  awardFields.forEach(({field, label})=>{
+    const realVal = realData[field] || "";
+    const realCell = realVal ? `<span class="real-score" style="font-size:10px">${escapeHtml(realVal)}</span>` : `<span class="no-data">—</span>`;
+    html += `<tr><td class="tabellone-match-col">${label}</td><td class="tabellone-real-col">${realCell}</td>`;
+    participants.forEach(p=>{
+      const awards = predictions[p.id] && predictions[p.id].awards;
+      const predVal = awards && awards[field] ? awards[field] : null;
+      let cell = `<span class="no-data">—</span>`;
+      if(predVal){
+        const isCorrect = realVal && realVal.trim().toLowerCase() === predVal.trim().toLowerCase();
+        cell = `<span class="pred-score ${isCorrect?'pred-exact':''}" style="font-size:10px">${escapeHtml(predVal)}</span>`;
+      }
+      html += `<td class="tabellone-p-col">${cell}</td>`;
+    });
+    html += `</tr>`;
+  });
+
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+}

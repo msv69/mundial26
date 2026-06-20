@@ -57,8 +57,10 @@ function requireAdmin(req, res){
 // Blocco temporale pronostici:
 // Giornate 1+2 → bloccate dopo il 16/6/2026 ore 17:00 (2h prima della prima partita G2 del 16/6)
 // Giornata 3   → bloccata dopo il 23/6/2026 ore 17:00 (2h prima della prima partita G3 del 23/6)
-const LOCK_G1G2 = new Date("2026-06-16T17:00:00+02:00");
-const LOCK_G3   = new Date("2026-06-23T17:00:00+02:00");
+const LOCK_G1G2  = new Date("2026-06-16T17:00:00+02:00");
+const LOCK_G3    = new Date("2026-06-23T17:00:00+02:00");
+const LOCK_GROUPS = new Date("2026-06-11T19:00:00+02:00"); // 2h prima del calcio d'inizio del Mondiale
+const LOCK_AWARDS = new Date("2026-06-11T19:00:00+02:00"); // stessa: inseriti prima dell'inizio
 
 // Mappa match_id → giornata (1, 2 o 3)
 const MATCH_ROUND = {};
@@ -216,6 +218,7 @@ router.get("/api/predictions/group-order", async (req, res) => {
 
 router.put("/api/predictions/group-order/:group/:pos", async (req, res, params) => {
   if(!requireParticipant(req, res)) return;
+  if(new Date() >= LOCK_GROUPS) return sendJson(res, 403, { error: "Pronostici gironi bloccati: il termine è scaduto" });
   const group = params.group.toUpperCase();
   const pos = parseInt(params.pos, 10);
   const body = await readJsonBody(req);
@@ -238,6 +241,7 @@ router.get("/api/predictions/awards", async (req, res) => {
 
 router.put("/api/predictions/awards", async (req, res) => {
   if(!requireParticipant(req, res)) return;
+  if(new Date() >= LOCK_AWARDS) return sendJson(res, 403, { error: "Pronostici premi bloccati: il termine è scaduto" });
   const body = await readJsonBody(req);
   db.prepare(`
     INSERT INTO predictions_awards (participant_id, winner, top_scorer, most_goals_team, best_player, best_goalkeeper)
@@ -353,9 +357,14 @@ router.post("/api/admin/group-phase-unlock", async (req, res) => {
   sendJson(res, 200, { locked: false });
 });
 
-// ---- STATO BLOCCO PARTITE (pubblico, usato dal frontend per colorare i campi bloccati) ----
+// ---- STATO BLOCCO (pubblico, usato dal frontend) ----
 router.get("/api/predictions/lock-status", async (req, res) => {
-  sendJson(res, 200, getMatchLockStatus());
+  const now = new Date();
+  sendJson(res, 200, {
+    matches: getMatchLockStatus(),
+    groups: { locked: now >= LOCK_GROUPS, lockTime: LOCK_GROUPS.toISOString() },
+    awards: { locked: now >= LOCK_AWARDS, lockTime: LOCK_AWARDS.toISOString() }
+  });
 });
 
 // ---- PRONOSTICI DI TUTTI I CONCORRENTI (solo admin) ----

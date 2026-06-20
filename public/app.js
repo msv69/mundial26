@@ -84,7 +84,7 @@ function renderLoginScreen(){
           <span class="icon">🛠️</span>
           <h2>Accesso amministratore</h2>
           <p>Area riservata all'organizzatore della lega: inserimento risultati reali, gestione concorrenti.</p>
-          <input type="password" id="login-password" placeholder="Password admin" autocomplete="off">
+          <input type="password" id="login-password" placeholder="Password admin" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
           <div style="margin-top:16px;"><button class="btn-primary" id="login-admin-btn" style="width:100%;">Entra come admin</button></div>
           <div class="error-msg" id="login-error"></div>
           <div class="login-switch">Sei un concorrente? <a id="switch-to-participant">Accedi con codice</a></div>

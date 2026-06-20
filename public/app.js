@@ -255,7 +255,8 @@ async function renderPronostici(el){
     groupWrap.innerHTML = `<div class="matchday-label">Girone ${g} — ${TOURNAMENT.groups[g].join(" · ")}</div>`;
     matchesByGroup[g].forEach(m=>{
       const s = saved[m.id] || {};
-      const locked = lockStatus[m.id] && lockStatus[m.id].locked;
+      const matchLocks = lockStatus.matches || lockStatus; // compatibilità
+      const locked = matchLocks[m.id] && matchLocks[m.id].locked;
       const row = document.createElement("div");
       row.className = "match-row" + (locked ? " match-locked" : "");
       row.innerHTML = `
@@ -282,7 +283,8 @@ async function renderPronostici(el){
     inp.addEventListener("change", async ()=>{
       const matchId = inp.dataset.match;
       // Ricontrolla lato client (il server blocca comunque lato server)
-      if(lockStatus[matchId] && lockStatus[matchId].locked){
+      const _matchLocks = lockStatus.matches || lockStatus;
+      if(_matchLocks[matchId] && _matchLocks[matchId].locked){
         showToast("Pronostico bloccato: il termine è scaduto", true);
         return;
       }
@@ -962,7 +964,8 @@ async function renderTabellonePartite(el){
       const real = realData[m.id];
       const realStr = (real && real.home !== null && real.away !== null)
         ? `<span class="real-score">${real.home}-${real.away}</span>` : `<span class="no-data">—</span>`;
-      const locked = lockStatus[m.id] && lockStatus[m.id].locked;
+      const _tLocks = lockStatus.matches || lockStatus;
+      const locked = _tLocks[m.id] && _tLocks[m.id].locked;
       html += `<tr class="${locked ? 'row-locked' : ''}">
         <td class="tabellone-match-col"><span class="match-label">${m.home} vs ${m.away}</span><span class="match-date-small">${m.date}</span></td>
         <td class="tabellone-real-col">${realStr}</td>`;

@@ -367,6 +367,51 @@ router.get("/api/predictions/lock-status", async (req, res) => {
   });
 });
 
+// ---- PRONOSTICI DI TUTTI I CONCORRENTI (pubbliche, visibili a tutti i loggati) ----
+router.get("/api/public/all-predictions/matches", async (req, res) => {
+  if(!req.session.participantId && !req.session.isAdmin)
+    return sendJson(res, 401, { error: "Accesso non autorizzato" });
+  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const allMatches = db.prepare("SELECT * FROM predictions_matches").all();
+  const byParticipant = {};
+  participants.forEach(p => { byParticipant[p.id] = { participant: p, matches: {} }; });
+  allMatches.forEach(r => {
+    if(byParticipant[r.participant_id])
+      byParticipant[r.participant_id].matches[r.match_id] = { home: r.home, away: r.away };
+  });
+  sendJson(res, 200, { participants, predictions: byParticipant });
+});
+
+router.get("/api/public/all-predictions/groups", async (req, res) => {
+  if(!req.session.participantId && !req.session.isAdmin)
+    return sendJson(res, 401, { error: "Accesso non autorizzato" });
+  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const allGroups = db.prepare("SELECT * FROM predictions_group_order").all();
+  const byParticipant = {};
+  participants.forEach(p => { byParticipant[p.id] = { participant: p, groups: {} }; });
+  allGroups.forEach(r => {
+    if(!byParticipant[r.participant_id]) return;
+    if(!byParticipant[r.participant_id].groups[r.group_letter])
+      byParticipant[r.participant_id].groups[r.group_letter] = [null,null,null,null];
+    byParticipant[r.participant_id].groups[r.group_letter][r.pos] = r.team;
+  });
+  sendJson(res, 200, { participants, predictions: byParticipant });
+});
+
+router.get("/api/public/all-predictions/awards", async (req, res) => {
+  if(!req.session.participantId && !req.session.isAdmin)
+    return sendJson(res, 401, { error: "Accesso non autorizzato" });
+  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const allAwards = db.prepare("SELECT * FROM predictions_awards").all();
+  const byParticipant = {};
+  participants.forEach(p => { byParticipant[p.id] = { participant: p, awards: {} }; });
+  allAwards.forEach(r => {
+    if(byParticipant[r.participant_id])
+      byParticipant[r.participant_id].awards = r;
+  });
+  sendJson(res, 200, { participants, predictions: byParticipant });
+});
+
 // ---- PRONOSTICI DI TUTTI I CONCORRENTI (solo admin) ----
 router.get("/api/admin/all-predictions/matches", async (req, res) => {
   if(!requireAdmin(req, res)) return;

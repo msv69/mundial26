@@ -174,6 +174,7 @@ const PARTICIPANT_TABS = [
   {id:"gironi", label:"Classifica gironi"},
   {id:"premi", label:"Premi finali"},
   {id:"classifica", label:"Classifica generale"},
+  {id:"listone", label:"Listone"},
   {id:"regolamento", label:"Regolamento"}
 ];
 const ADMIN_TABS = [
@@ -181,6 +182,7 @@ const ADMIN_TABS = [
   {id:"admin-risultati", label:"Risultati reali"},
   {id:"admin-tabellone", label:"Tabellone pronostici"},
   {id:"classifica", label:"Classifica generale"},
+  {id:"listone", label:"Listone"},
   {id:"regolamento", label:"Regolamento"}
 ];
 
@@ -217,6 +219,7 @@ function renderPanels(){
   else if(activeTab==="admin-concorrenti") renderAdminConcorrenti(el);
   else if(activeTab==="admin-risultati") renderRisultatiAdmin(el);
   else if(activeTab==="admin-tabellone") renderAdminTabellone(el);
+  else if(activeTab==="listone") renderListone(el);
 }
 
 // ============================================================
@@ -1077,6 +1080,200 @@ async function renderTabellonePremi(el){
         cell = `<span class="pred-score ${isCorrect?'pred-exact':''}" style="font-size:10px">${escapeHtml(predVal)}</span>`;
       }
       html += `<td class="tabellone-p-col">${cell}</td>`;
+    });
+    html += `</tr>`;
+  });
+
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+}
+
+// ============================================================
+// TAB LISTONE — pronostici di tutti i concorrenti (visibile a tutti)
+// Usa le stesse rotte pubbliche, non quelle admin
+// ============================================================
+let listoneSubTab = "partite";
+
+async function renderListone(el){
+  el.innerHTML = `
+    <div class="section-title">Listone — pronostici di tutti i concorrenti</div>
+    <div class="subtabs">
+      <button class="subtab-btn ${listoneSubTab==='partite'?'active':''}" data-sub="partite">Partite</button>
+      <button class="subtab-btn ${listoneSubTab==='gironi'?'active':''}" data-sub="gironi">Classifiche gironi</button>
+      <button class="subtab-btn ${listoneSubTab==='premi'?'active':''}" data-sub="premi">Premi finali</button>
+    </div>
+    <div id="listone-content"><div class="loading-msg">Carico…</div></div>
+  `;
+  el.querySelectorAll(".subtab-btn").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      listoneSubTab = btn.dataset.sub;
+      renderListone(el);
+    });
+  });
+  const content = el.querySelector("#listone-content");
+  if(listoneSubTab === "partite") await renderListonePartite(content);
+  else if(listoneSubTab === "gironi") await renderListoneGironi(content);
+  else await renderListonePremi(content);
+}
+
+async function renderListonePartite(el){
+  el.innerHTML = `<div class="loading-msg">Carico…</div>`;
+  // Usa rotte admin se admin, altrimenti rotte pubbliche
+  const isAdmin = SESSION.type === "admin";
+  let data, realData, lockStatus;
+  try{
+    const predsEndpoint = isAdmin ? "/admin/all-predictions/matches" : "/public/all-predictions/matches";
+    [data, realData, lockStatus] = await Promise.all([
+      apiGet(predsEndpoint),
+      apiGet("/real/matches"),
+      apiGet("/predictions/lock-status")
+    ]);
+  }catch(e){
+    el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const { participants, predictions } = data;
+
+  const matchesByGroup = {};
+  TOURNAMENT.matches.forEach(m=>{
+    if(!matchesByGroup[m.group]) matchesByGroup[m.group] = [];
+    matchesByGroup[m.group].push(m);
+  });
+
+  let html = `<div class="tabellone-scroll"><table class="tabellone-table"><thead><tr>
+    <th class="tabellone-match-col">Partita</th>
+    <th class="tabellone-real-col">Reale</th>
+    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${escapeHtml(p.name)}</th>`).join('')}
+  </tr></thead><tbody>`;
+
+  Object.keys(matchesByGroup).sort().forEach(g=>{
+    html += `<tr class="tabellone-group-row"><td colspan="${participants.length+2}">Girone ${g} — ${TOURNAMENT.groups[g].join(' · ')}</td></tr>`;
+    matchesByGroup[g].forEach(m=>{
+      const real = realData[m.id];
+      const realStr = (real && real.home !== null && real.away !== null)
+        ? `<span class="real-score">${real.home}-${real.away}</span>` : `<span class="no-data">—</span>`;
+      const matchLocks = lockStatus.matches || lockStatus;
+      const locked = matchLocks[m.id] && matchLocks[m.id].locked;
+      html += `<tr class="${locked?'row-locked':''}">
+        <td class="tabellone-match-col"><span class="match-label">${m.home} vs ${m.away}</span><span class="match-date-small">${m.date}</span></td>
+        <td class="tabellone-real-col">${realStr}</td>`;
+      participants.forEach(p=>{
+        const pred = predictions[p.id] && predictions[p.id].matches[m.id];
+        let cell = `<span class="no-data">—</span>`;
+        if(pred && pred.home !== null && pred.away !== null){
+          const isExact = real && real.home !== null && Number(pred.home)===Number(real.home) && Number(pred.away)===Number(real.away);
+          const real1x2 = real ? (Number(real.home)>Number(real.away)?'1':Number(real.home)<Number(real.away)?'2':'X') : null;
+          const pred1x2 = Number(pred.home)>Number(pred.away)?'1':Number(pred.home)<Number(pred.away)?'2':'X';
+          const isSign = real && !isExact && real1x2 && real1x2===pred1x2;
+          const cls = isExact ? 'pred-exact' : isSign ? 'pred-sign' : '';
+          cell = `<span class="pred-score ${cls}">${pred.home}-${pred.away}</span>`;
+        }
+        const isMine = p.id === SESSION.id;
+        html += `<td class="tabellone-p-col${isMine?' me-col':''}">${cell}</td>`;
+      });
+      html += `</tr>`;
+    });
+  });
+
+  html += `</tbody></table></div>`;
+  html += `<p style="font-size:11px;color:var(--chalk-dim);margin-top:8px;font-family:'Space Mono',monospace">
+    <span class="pred-score pred-exact">2-1</span> = esatto (+5pt) &nbsp;
+    <span class="pred-score pred-sign">2-1</span> = 1X2 corretto (+2pt)
+  </p>`;
+  el.innerHTML = html;
+}
+
+async function renderListoneGironi(el){
+  el.innerHTML = `<div class="loading-msg">Carico…</div>`;
+  const isAdmin = SESSION.type === "admin";
+  let data, realData;
+  try{
+    const predsEndpoint = isAdmin ? "/admin/all-predictions/groups" : "/public/all-predictions/groups";
+    [data, realData] = await Promise.all([
+      apiGet(predsEndpoint),
+      apiGet("/real/group-order")
+    ]);
+  }catch(e){
+    el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const { participants, predictions } = data;
+
+  let html = `<div class="tabellone-scroll"><table class="tabellone-table"><thead><tr>
+    <th class="tabellone-match-col">Girone / Pos.</th>
+    <th class="tabellone-real-col">Reale</th>
+    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${escapeHtml(p.name)}</th>`).join('')}
+  </tr></thead><tbody>`;
+
+  Object.keys(TOURNAMENT.groups).sort().forEach(g=>{
+    html += `<tr class="tabellone-group-row"><td colspan="${participants.length+2}">Girone ${g}</td></tr>`;
+    for(let pos=0; pos<4; pos++){
+      const realTeam = realData[g] && realData[g][pos];
+      const realCell = realTeam ? `<span class="real-score" style="font-size:11px">${realTeam}</span>` : `<span class="no-data">—</span>`;
+      html += `<tr><td class="tabellone-match-col">${pos+1}° posto</td><td class="tabellone-real-col">${realCell}</td>`;
+      participants.forEach(p=>{
+        const pg = predictions[p.id] && predictions[p.id].groups[g];
+        const predTeam = pg && pg[pos];
+        let cell = `<span class="no-data">—</span>`;
+        if(predTeam){
+          const isCorrect = realTeam && realTeam === predTeam;
+          cell = `<span class="pred-score ${isCorrect?'pred-exact':''}" style="font-size:10px">${predTeam}</span>`;
+        }
+        const isMine = p.id === SESSION.id;
+        html += `<td class="tabellone-p-col${isMine?' me-col':''}">${cell}</td>`;
+      });
+      html += `</tr>`;
+    }
+  });
+
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+}
+
+async function renderListonePremi(el){
+  el.innerHTML = `<div class="loading-msg">Carico…</div>`;
+  const isAdmin = SESSION.type === "admin";
+  let data, realData;
+  try{
+    const predsEndpoint = isAdmin ? "/admin/all-predictions/awards" : "/public/all-predictions/awards";
+    [data, realData] = await Promise.all([
+      apiGet(predsEndpoint),
+      apiGet("/real/awards")
+    ]);
+  }catch(e){
+    el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const { participants, predictions } = data;
+
+  const awardFields = [
+    {field:"winner",          label:"🏆 Vincitore"},
+    {field:"top_scorer",      label:"⚽ Capocannoniere"},
+    {field:"most_goals_team", label:"🥅 Squadra più gol"},
+    {field:"best_player",     label:"⭐ Miglior giocatore"},
+    {field:"best_goalkeeper", label:"🧤 Miglior portiere"}
+  ];
+
+  let html = `<div class="tabellone-scroll"><table class="tabellone-table"><thead><tr>
+    <th class="tabellone-match-col">Premio</th>
+    <th class="tabellone-real-col">Reale</th>
+    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${escapeHtml(p.name)}</th>`).join('')}
+  </tr></thead><tbody>`;
+
+  awardFields.forEach(({field, label})=>{
+    const realVal = realData[field] || "";
+    const realCell = realVal ? `<span class="real-score" style="font-size:10px">${escapeHtml(realVal)}</span>` : `<span class="no-data">—</span>`;
+    html += `<tr><td class="tabellone-match-col">${label}</td><td class="tabellone-real-col">${realCell}</td>`;
+    participants.forEach(p=>{
+      const awards = predictions[p.id] && predictions[p.id].awards;
+      const predVal = awards && awards[field] ? awards[field] : null;
+      let cell = `<span class="no-data">—</span>`;
+      if(predVal){
+        const isCorrect = realVal && realVal.trim().toLowerCase() === predVal.trim().toLowerCase();
+        cell = `<span class="pred-score ${isCorrect?'pred-exact':''}" style="font-size:10px">${escapeHtml(predVal)}</span>`;
+      }
+      const isMine = p.id === SESSION.id;
+      html += `<td class="tabellone-p-col${isMine?' me-col':''}">${cell}</td>`;
     });
     html += `</tr>`;
   });

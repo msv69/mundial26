@@ -308,17 +308,25 @@ async function renderPronostici(el){
 // ============================================================
 async function renderGironi(el){
   el.innerHTML = `<div class="loading-msg">Carico i tuoi pronostici sui gironi…</div>`;
-  let saved;
+  let saved, lockStatus;
   try{
-    saved = await apiGet("/predictions/group-order");
+    [saved, lockStatus] = await Promise.all([
+      apiGet("/predictions/group-order"),
+      apiGet("/predictions/lock-status")
+    ]);
   }catch(e){
     el.innerHTML = `<div class="empty-state">Errore nel caricamento: ${escapeHtml(e.message)}</div>`;
     return;
   }
 
+  const locked = lockStatus.groups && lockStatus.groups.locked;
+
   el.innerHTML = `
     <div class="section-title">Pronostico classifica finale dei gironi <span class="tag">12 gironi</span></div>
-    <p class="section-desc">Per ogni girone, indica la squadra che pensi arriverà 1ª, 2ª, 3ª e 4ª. Ogni posizione corretta vale punti (vedi Regolamento).</p>
+    ${locked
+      ? `<p class="section-desc" style="color:#ff8a7a">🔒 Pronostici gironi bloccati — il termine è scaduto l'11 giugno alle 19:00.</p>`
+      : `<p class="section-desc">Per ogni girone, indica la squadra che pensi arriverà 1ª, 2ª, 3ª e 4ª. Ogni posizione corretta vale punti (vedi Regolamento).</p>`
+    }
   `;
 
   const grid = document.createElement("div");
@@ -327,14 +335,15 @@ async function renderGironi(el){
   Object.keys(TOURNAMENT.groups).sort().forEach(g=>{
     const order = saved[g] || [null,null,null,null];
     const block = document.createElement("div");
-    block.className = "group-block";
-    block.innerHTML = `<h4>Girone ${g} <span class="badge">4 squadre</span></h4>`;
+    block.className = "group-block" + (locked ? " group-block-locked" : "");
+    block.innerHTML = `<h4>Girone ${g} <span class="badge">4 squadre</span>${locked ? ' 🔒' : ''}</h4>`;
     for(let pos=0; pos<4; pos++){
       const row = document.createElement("div");
       row.className = "pos-row";
       row.innerHTML = `
         <span class="pos-num">${pos+1}°</span>
-        <select data-group="${g}" data-pos="${pos}">${groupTeamOptionsHtml(g, order[pos])}</select>
+        <select data-group="${g}" data-pos="${pos}" ${locked ? "disabled" : ""}
+          class="${locked ? 'input-locked' : ''}">${groupTeamOptionsHtml(g, order[pos])}</select>
       `;
       block.appendChild(row);
     }
@@ -343,21 +352,23 @@ async function renderGironi(el){
 
   el.appendChild(grid);
 
-  grid.querySelectorAll("select").forEach(sel=>{
-    sel.addEventListener("change", async ()=>{
-      const g = sel.dataset.group;
-      const pos = sel.dataset.pos;
-      pulseSync("saving");
-      try{
-        await apiPut(`/predictions/group-order/${g}/${pos}`, { team: sel.value });
-        pulseSync("ok");
-        showToast(`Pronostico girone ${g} salvato`);
-      }catch(e){
-        pulseSync("error");
-        showToast("Errore: " + e.message, true);
-      }
+  if(!locked){
+    grid.querySelectorAll("select").forEach(sel=>{
+      sel.addEventListener("change", async ()=>{
+        const g = sel.dataset.group;
+        const pos = sel.dataset.pos;
+        pulseSync("saving");
+        try{
+          await apiPut(`/predictions/group-order/${g}/${pos}`, { team: sel.value });
+          pulseSync("ok");
+          showToast(`Pronostico girone ${g} salvato`);
+        }catch(e){
+          pulseSync("error");
+          showToast("Errore: " + e.message, true);
+        }
+      });
     });
-  });
+  }
 }
 
 // ============================================================
@@ -373,17 +384,25 @@ const AWARD_DEFS = [
 
 async function renderPremi(el){
   el.innerHTML = `<div class="loading-msg">Carico i tuoi pronostici sui premi…</div>`;
-  let saved;
+  let saved, lockStatus;
   try{
-    saved = await apiGet("/predictions/awards");
+    [saved, lockStatus] = await Promise.all([
+      apiGet("/predictions/awards"),
+      apiGet("/predictions/lock-status")
+    ]);
   }catch(e){
     el.innerHTML = `<div class="empty-state">Errore nel caricamento: ${escapeHtml(e.message)}</div>`;
     return;
   }
 
+  const locked = lockStatus.awards && lockStatus.awards.locked;
+
   el.innerHTML = `
     <div class="section-title">Pronostici sui premi finali</div>
-    <p class="section-desc">Indica chi vincerà ciascun riconoscimento individuale e di squadra. Per capocannoniere, miglior giocatore e miglior portiere scrivi nome e cognome del calciatore.</p>
+    ${locked
+      ? `<p class="section-desc" style="color:#ff8a7a">🔒 Pronostici premi bloccati — il termine è scaduto l'11 giugno alle 19:00.</p>`
+      : `<p class="section-desc">Indica chi vincerà ciascun riconoscimento individuale e di squadra. Per capocannoniere, miglior giocatore e miglior portiere scrivi nome e cognome del calciatore.</p>`
+    }
   `;
 
   const grid = document.createElement("div");
@@ -391,41 +410,42 @@ async function renderPremi(el){
   AWARD_DEFS.forEach(def=>{
     const val = saved[def.field] || "";
     const card = document.createElement("div");
-    card.className = "award-card";
+    card.className = "award-card" + (locked ? " award-card-locked" : "");
     card.innerHTML = `
       <span class="icon">${def.icon}</span>
-      <div class="award-title">${def.title}</div>
+      <div class="award-title">${def.title}${locked ? ' 🔒' : ''}</div>
       <div class="points">${def.points} punti se esatto</div>
       ${def.type==="team"
-        ? `<select data-award="${def.field}">${teamOptionsHtml(val)}</select>`
-        : `<input type="text" data-award="${def.field}" value="${escapeHtml(val)}" placeholder="Nome e cognome">`
+        ? `<select data-award="${def.field}" ${locked ? "disabled" : ""} class="${locked ? 'input-locked' : ''}">${teamOptionsHtml(val)}</select>`
+        : `<input type="text" data-award="${def.field}" value="${escapeHtml(val)}" placeholder="Nome e cognome" ${locked ? "disabled" : ""} class="${locked ? 'input-locked' : ''}">`
       }
     `;
     grid.appendChild(card);
   });
   el.appendChild(grid);
 
-  async function saveAwards(){
-    const payload = {};
-    AWARD_DEFS.forEach(def=>{
-      const input = grid.querySelector(`[data-award="${def.field}"]`);
-      payload[def.field] = input.value;
-    });
-    pulseSync("saving");
-    try{
-      await apiPut("/predictions/awards", payload);
-      pulseSync("ok");
-      showToast("Premio aggiornato");
-    }catch(e){
-      pulseSync("error");
-      showToast("Errore: " + e.message, true);
+  if(!locked){
+    async function saveAwards(){
+      const payload = {};
+      AWARD_DEFS.forEach(def=>{
+        const input = grid.querySelector(`[data-award="${def.field}"]`);
+        payload[def.field] = input.value;
+      });
+      pulseSync("saving");
+      try{
+        await apiPut("/predictions/awards", payload);
+        pulseSync("ok");
+        showToast("Premio aggiornato");
+      }catch(e){
+        pulseSync("error");
+        showToast("Errore: " + e.message, true);
+      }
     }
+    grid.querySelectorAll("[data-award]").forEach(input=>{
+      const ev = input.tagName === "SELECT" ? "change" : "blur";
+      input.addEventListener(ev, saveAwards);
+    });
   }
-
-  grid.querySelectorAll("[data-award]").forEach(input=>{
-    const ev = input.tagName === "SELECT" ? "change" : "blur";
-    input.addEventListener(ev, saveAwards);
-  });
 }
 
 // ============================================================

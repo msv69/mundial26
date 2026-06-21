@@ -338,6 +338,60 @@ router.post("/api/admin/auto-group-order/:group", async (req, res, params) => {
   sendJson(res, 200, { group, order: ordered, stats });
 });
 
+// ---- ROUTE ADMIN: modifica pronostici concorrenti (bypassa blocco temporale) ----
+router.put("/api/admin/set-prediction/group-order/:participantId/:group/:pos", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const pid = parseInt(params.participantId, 10);
+  const group = params.group.toUpperCase();
+  const pos = parseInt(params.pos, 10);
+  const body = await readJsonBody(req);
+  if(!GROUPS[group] || pos < 0 || pos > 3) return sendJson(res, 400, { error: "Girone o posizione non validi" });
+  const p = db.prepare("SELECT id FROM participants WHERE id = ?").get(pid);
+  if(!p) return sendJson(res, 404, { error: "Concorrente non trovato" });
+  db.prepare(`
+    INSERT INTO predictions_group_order (participant_id, group_letter, pos, team)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(participant_id, group_letter, pos) DO UPDATE SET team=excluded.team
+  `).run(pid, group, pos, body.team || null);
+  sendJson(res, 200, { ok: true });
+});
+
+router.put("/api/admin/set-prediction/matches/:participantId/:matchId", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const pid = parseInt(params.participantId, 10);
+  const { matchId } = params;
+  const body = await readJsonBody(req);
+  const valid = MATCHES.some(m => m.id === matchId);
+  if(!valid) return sendJson(res, 400, { error: "Partita non valida" });
+  const p = db.prepare("SELECT id FROM participants WHERE id = ?").get(pid);
+  if(!p) return sendJson(res, 404, { error: "Concorrente non trovato" });
+  const h = body.home === "" || body.home === null || body.home === undefined ? null : parseInt(body.home, 10);
+  const a = body.away === "" || body.away === null || body.away === undefined ? null : parseInt(body.away, 10);
+  db.prepare(`
+    INSERT INTO predictions_matches (participant_id, match_id, home, away)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(participant_id, match_id) DO UPDATE SET home=excluded.home, away=excluded.away
+  `).run(pid, matchId, h, a);
+  sendJson(res, 200, { ok: true });
+});
+
+router.put("/api/admin/set-prediction/awards/:participantId", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const pid = parseInt(params.participantId, 10);
+  const body = await readJsonBody(req);
+  const p = db.prepare("SELECT id FROM participants WHERE id = ?").get(pid);
+  if(!p) return sendJson(res, 404, { error: "Concorrente non trovato" });
+  db.prepare(`
+    INSERT INTO predictions_awards (participant_id, winner, top_scorer, most_goals_team, best_player, best_goalkeeper)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(participant_id) DO UPDATE SET
+      winner=excluded.winner, top_scorer=excluded.top_scorer,
+      most_goals_team=excluded.most_goals_team, best_player=excluded.best_player,
+      best_goalkeeper=excluded.best_goalkeeper
+  `).run(pid, body.winner||"", body.top_scorer||"", body.most_goals_team||"", body.best_player||"", body.best_goalkeeper||"");
+  sendJson(res, 200, { ok: true });
+});
+
 // ---- BLOCCO/SBLOCCO FASE A GIRONI ----
 router.get("/api/admin/group-phase-status", async (req, res) => {
   if(!requireAdmin(req, res)) return;
@@ -450,6 +504,158 @@ router.get("/api/admin/all-predictions/awards", async (req, res) => {
   allAwards.forEach(r => {
     if(byParticipant[r.participant_id])
       byParticipant[r.participant_id].awards = r;
+  });
+  sendJson(res, 200, { participants, predictions: byParticipant });
+});
+
+// ============================================================
+// FASE KNOCKOUT — slot, pronostici e risultati
+// ============================================================
+
+// Risolve le squadre degli slot dai risultati reali dei gironi e dai knockout precedenti
+function resolveKnockoutSlots(){
+  const { KNOCKOUT_MATCHES } = require("./data");
+  const groupOrder = getRealGroupOrder(); // {A:[team0,team1,team2,team3], ...}
+
+  // Recupera i risultati reali dei knockout già inseriti
+  const realKO = db.prepare("SELECT * FROM real_knockout").all();
+  const realKOMap = {};
+  realKO.forEach(r => realKOMap[r.match_id] = r);
+
+  // Per ogni slot, risolve la squadra in base alla descrizione
+  function resolveSlot(slot) {
+    if(!slot) return null;
+    // "1ª Girone A" → prima classificata del girone A
+    const groupMatch = slot.match(/^(\d)ª Girone ([A-L])$/);
+    if(groupMatch) {
+      const pos = parseInt(groupMatch[1]) - 1;
+      const g = groupMatch[2];
+      return groupOrder[g] && groupOrder[g][pos] || null;
+    }
+    // "3ª Girone A/B/C/D/F" → terza classificata (l'admin la inserisce manualmente)
+    if(slot.startsWith("3ª Girone ")) return null; // da inserire manualmente
+    // "Vincente R32-1" → vincente del match R32-1
+    const vincMatch = slot.match(/^Vincente (.+)$/);
+    if(vincMatch) {
+      const r = realKOMap[vincMatch[1]];
+      return r ? r.qualifier : null;
+    }
+    // "Perdente SF-1" → perdente della semifinale
+    const perdMatch = slot.match(/^Perdente (.+)$/);
+    if(perdMatch) {
+      const r = realKOMap[perdMatch[1]];
+      if(!r || !r.qualifier) return null;
+      // Il perdente è la squadra che NON ha vinto
+      if(r.home_team === r.qualifier) return r.away_team;
+      if(r.away_team === r.qualifier) return r.home_team;
+      return null;
+    }
+    return null;
+  }
+
+  return KNOCKOUT_MATCHES.map(m => ({
+    ...m,
+    homeTeam: realKOMap[m.id]?.home_team || resolveSlot(m.homeSlot),
+    awayTeam: realKOMap[m.id]?.away_team || resolveSlot(m.awaySlot),
+    result: realKOMap[m.id] ? {
+      home: realKOMap[m.id].home,
+      away: realKOMap[m.id].away,
+      qualifier: realKOMap[m.id].qualifier
+    } : null
+  }));
+}
+
+// GET: stato completo del tabellone knockout (pubblico)
+router.get("/api/knockout/matches", async (req, res) => {
+  const { KNOCKOUT_PHASES } = require("./data");
+  sendJson(res, 200, {
+    phases: KNOCKOUT_PHASES,
+    matches: resolveKnockoutSlots()
+  });
+});
+
+// GET: pronostici knockout del concorrente loggato
+router.get("/api/predictions/knockout", async (req, res) => {
+  if(!requireParticipant(req, res)) return;
+  const rows = db.prepare("SELECT * FROM predictions_knockout WHERE participant_id = ?").all(req.session.participantId);
+  const map = {};
+  rows.forEach(r => map[r.match_id] = { home: r.home, away: r.away, qualifier: r.qualifier });
+  sendJson(res, 200, map);
+});
+
+// PUT: salva pronostico knockout (solo se la partita ha le squadre assegnate)
+router.put("/api/predictions/knockout/:matchId", async (req, res, params) => {
+  if(!requireParticipant(req, res)) return;
+  const { matchId } = params;
+  const { KNOCKOUT_MATCHES, KNOCKOUT_PHASES } = require("./data");
+  const match = KNOCKOUT_MATCHES.find(m => m.id === matchId);
+  if(!match) return sendJson(res, 400, { error: "Partita knockout non valida" });
+
+  // Blocco temporale: 2h prima del kickoff della fase
+  const phase = KNOCKOUT_PHASES.find(p => p.id === match.phase);
+  if(phase) {
+    const lockTime = new Date(new Date(phase.firstKickoff).getTime() - 2*60*60*1000);
+    if(new Date() >= lockTime) return sendJson(res, 403, { error: "Pronostico bloccato: il termine per questa fase è scaduto" });
+  }
+
+  const body = await readJsonBody(req);
+  const h = body.home === "" || body.home === null || body.home === undefined ? null : Math.max(0, Math.min(20, parseInt(body.home, 10)));
+  const a = body.away === "" || body.away === null || body.away === undefined ? null : Math.max(0, Math.min(20, parseInt(body.away, 10)));
+  const q = body.qualifier || null;
+
+  db.prepare(`
+    INSERT INTO predictions_knockout (participant_id, match_id, home, away, qualifier)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(participant_id, match_id) DO UPDATE SET home=excluded.home, away=excluded.away, qualifier=excluded.qualifier
+  `).run(req.session.participantId, matchId, h, a, q);
+  sendJson(res, 200, { ok: true });
+});
+
+// Admin: inserisce risultato reale knockout + squadre + vincitore
+router.put("/api/admin/real/knockout/:matchId", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const { matchId } = params;
+  const { KNOCKOUT_MATCHES } = require("./data");
+  if(!KNOCKOUT_MATCHES.find(m => m.id === matchId))
+    return sendJson(res, 400, { error: "Partita knockout non valida" });
+  const body = await readJsonBody(req);
+  const h = body.home === "" || body.home === null ? null : parseInt(body.home, 10);
+  const a = body.away === "" || body.away === null ? null : parseInt(body.away, 10);
+  db.prepare(`
+    INSERT INTO real_knockout (match_id, home_team, away_team, home, away, qualifier, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(match_id) DO UPDATE SET
+      home_team=excluded.home_team, away_team=excluded.away_team,
+      home=excluded.home, away=excluded.away,
+      qualifier=excluded.qualifier, updated_at=excluded.updated_at
+  `).run(matchId, body.homeTeam || null, body.awayTeam || null, h, a, body.qualifier || null);
+  sendJson(res, 200, { ok: true });
+});
+
+// Tutti i pronostici knockout (pubblico per concorrenti loggati, usato dal listone)
+router.get("/api/public/all-predictions/knockout", async (req, res) => {
+  if(!req.session.participantId && !req.session.isAdmin)
+    return sendJson(res, 401, { error: "Accesso non autorizzato" });
+  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const allKO = db.prepare("SELECT * FROM predictions_knockout").all();
+  const byParticipant = {};
+  participants.forEach(p => { byParticipant[p.id] = { participant: p, knockout: {} }; });
+  allKO.forEach(r => {
+    if(byParticipant[r.participant_id])
+      byParticipant[r.participant_id].knockout[r.match_id] = { home: r.home, away: r.away, qualifier: r.qualifier };
+  });
+  sendJson(res, 200, { participants, predictions: byParticipant });
+});
+
+router.get("/api/admin/all-predictions/knockout", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const allKO = db.prepare("SELECT * FROM predictions_knockout").all();
+  const byParticipant = {};
+  participants.forEach(p => { byParticipant[p.id] = { participant: p, knockout: {} }; });
+  allKO.forEach(r => {
+    if(byParticipant[r.participant_id])
+      byParticipant[r.participant_id].knockout[r.match_id] = { home: r.home, away: r.away, qualifier: r.qualifier };
   });
   sendJson(res, 200, { participants, predictions: byParticipant });
 });

@@ -95,10 +95,18 @@ function calcPunteggioPartite(participantId, realMatches){
 // Calcola i punti dei gironi (pronostico classifica)
 // Restituisce anche il flag "definitivo" (se i gironi sono chiusi)
 // ------------------------------------------------------------
-function calcPunteggioGironi(participantId, numParticipants, realGroupOrder){
-  const perPos = pointsForGroupPosition(numParticipants);
-  let punti = 0;
+function pointsForCorrectPositions(correct){
+  // Punteggio fisso totale in base al numero di posizioni corrette indovinate
+  if(correct <= 9)  return 4;
+  if(correct <= 19) return 6;
+  if(correct <= 27) return 8;
+  if(correct <= 34) return 10;
+  if(correct <= 39) return 12;
+  if(correct <= 46) return 15;
+  return 20; // 47-48
+}
 
+function calcPunteggioGironi(participantId, numParticipants, realGroupOrder){
   const predRows = db.prepare(
     "SELECT group_letter, pos, team FROM predictions_group_order WHERE participant_id = ?"
   ).all(participantId);
@@ -108,16 +116,19 @@ function calcPunteggioGironi(participantId, numParticipants, realGroupOrder){
     predMap[r.group_letter][r.pos] = r.team;
   });
 
+  // Conta prima il numero totale di posizioni corrette
+  let correct = 0;
   Object.keys(GROUPS).forEach(g => {
     const real = realGroupOrder[g];
     const guess = predMap[g];
     if(!real || !guess) return;
     for(let i = 0; i < 4; i++){
-      if(real[i] && guess[i] && real[i] === guess[i]) punti += perPos;
+      if(real[i] && guess[i] && real[i] === guess[i]) correct++;
     }
   });
 
-  return punti;
+  // Il punteggio totale è fisso in base alla fascia
+  return pointsForCorrectPositions(correct);
 }
 
 // ------------------------------------------------------------

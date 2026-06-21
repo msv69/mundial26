@@ -1098,8 +1098,9 @@ async function renderListone(el){
   el.innerHTML = `
     <div class="section-title">Listone — pronostici di tutti i concorrenti</div>
     <div class="subtabs">
-      <button class="subtab-btn ${listoneSubTab==='partite'?'active':''}" data-sub="partite">Partite</button>
-      <button class="subtab-btn ${listoneSubTab==='gironi'?'active':''}" data-sub="gironi">Classifiche gironi</button>
+      <button class="subtab-btn ${listoneSubTab==='partite'?'active':''}" data-sub="partite">Gironi — Partite</button>
+      <button class="subtab-btn ${listoneSubTab==='gironi'?'active':''}" data-sub="gironi">Gironi — Classifiche</button>
+      <button class="subtab-btn ${listoneSubTab==='knockout'?'active':''}" data-sub="knockout">Fase finale</button>
       <button class="subtab-btn ${listoneSubTab==='premi'?'active':''}" data-sub="premi">Premi finali</button>
     </div>
     <div id="listone-content"><div class="loading-msg">Carico…</div></div>
@@ -1113,6 +1114,7 @@ async function renderListone(el){
   const content = el.querySelector("#listone-content");
   if(listoneSubTab === "partite") await renderListonePartite(content);
   else if(listoneSubTab === "gironi") await renderListoneGironi(content);
+  else if(listoneSubTab === "knockout") await renderListoneKnockout(content);
   else await renderListonePremi(content);
 }
 
@@ -1279,5 +1281,99 @@ async function renderListonePremi(el){
   });
 
   html += `</tbody></table></div>`;
+  el.innerHTML = html;
+}
+
+// ============================================================
+// LISTONE — FASE KNOCKOUT (sedicesimi → finale)
+// ============================================================
+async function renderListoneKnockout(el){
+  el.innerHTML = `<div class="loading-msg">Carico il tabellone knockout…</div>`;
+  const isAdmin = SESSION.type === "admin";
+  const predsEndpoint = isAdmin ? "/admin/all-predictions/knockout" : "/public/all-predictions/knockout";
+  let koData, predsData;
+  try{
+    [koData, predsData] = await Promise.all([
+      apiGet("/knockout/matches"),
+      apiGet(predsEndpoint)
+    ]);
+  }catch(e){
+    el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  const { phases, matches } = koData;
+  const { participants, predictions } = predsData;
+
+  const phaseOrder = ["sedicesimi","ottavi","quarti","semifinali","finale3","finale"];
+  const phaseLabels = {
+    sedicesimi:"Sedicesimi di finale", ottavi:"Ottavi di finale",
+    quarti:"Quarti di finale", semifinali:"Semifinali",
+    finale3:"Finale 3°/4° posto", finale:"Finale"
+  };
+
+  let html = `<div class="tabellone-scroll"><table class="tabellone-table"><thead><tr>
+    <th class="tabellone-match-col">Partita</th>
+    <th class="tabellone-real-col">Reale</th>
+    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${escapeHtml(p.name)}</th>`).join('')}
+  </tr></thead><tbody>`;
+
+  phaseOrder.forEach(phaseId => {
+    const phaseMatches = matches.filter(m => m.phase === phaseId);
+    if(!phaseMatches.length) return;
+
+    html += `<tr class="tabellone-group-row"><td colspan="${participants.length+2}">${phaseLabels[phaseId]}</td></tr>`;
+
+    phaseMatches.forEach(m => {
+      const homeLabel = m.homeTeam || `<span class="slot-label">${escapeHtml(m.homeSlot)}</span>`;
+      const awayLabel = m.awayTeam || `<span class="slot-label">${escapeHtml(m.awaySlot)}</span>`;
+      const hasTeams = m.homeTeam && m.awayTeam;
+
+      // Risultato reale
+      let realCell = `<span class="no-data">—</span>`;
+      if(m.result && m.result.home !== null && m.result.away !== null){
+        const q = m.result.qualifier ? ` <span class="qualifier-badge">${escapeHtml(m.result.qualifier)} ✓</span>` : '';
+        realCell = `<span class="real-score">${m.result.home}-${m.result.away}</span>${q}`;
+      }
+
+      // Data/kickoff formattata
+      const koDate = m.kickoff ? new Date(m.kickoff).toLocaleDateString('it-IT',{day:'numeric',month:'short'}) : '';
+
+      html += `<tr class="${!hasTeams?'row-pending':''}">
+        <td class="tabellone-match-col">
+          <span class="match-label">${hasTeams ? `${escapeHtml(m.homeTeam)} vs ${escapeHtml(m.awayTeam)}` : `${homeLabel} vs ${awayLabel}`}</span>
+          <span class="match-date-small">${koDate}</span>
+        </td>
+        <td class="tabellone-real-col">${realCell}</td>`;
+
+      participants.forEach(p => {
+        const pred = predictions[p.id] && predictions[p.id].knockout[m.id];
+        let cell = `<span class="no-data">—</span>`;
+        if(pred && pred.home !== null && pred.away !== null && hasTeams){
+          const isExact = m.result && m.result.home !== null &&
+            Number(pred.home)===Number(m.result.home) && Number(pred.away)===Number(m.result.away);
+          const predQ = pred.qualifier;
+          const realQ = m.result && m.result.qualifier;
+          const qCorrect = realQ && predQ && realQ === predQ;
+          const cls = isExact ? 'pred-exact' : '';
+          const qBadge = predQ ? ` <span style="font-size:9px;color:${qCorrect?'#7fd99a':'var(--chalk-dim)'}">${escapeHtml(predQ)}</span>` : '';
+          cell = `<span class="pred-score ${cls}">${pred.home}-${pred.away}${qBadge}</span>`;
+        } else if(pred && pred.qualifier && !hasTeams){
+          cell = `<span class="pred-score" style="font-size:10px">${escapeHtml(pred.qualifier)}</span>`;
+        }
+        const isMine = p.id === SESSION.id;
+        html += `<td class="tabellone-p-col${isMine?' me-col':''}">${cell}</td>`;
+      });
+
+      html += `</tr>`;
+    });
+  });
+
+  html += `</tbody></table></div>`;
+  html += `<p style="font-size:11px;color:var(--chalk-dim);margin-top:8px;font-family:'Space Mono',monospace">
+    Le partite con sfondo grigio sono ancora da definire (squadre non ancora note). 
+    <span class="pred-score pred-exact">2-1</span> = esatto (+8pt) &nbsp;
+    Il nome verde sotto il risultato indica il qualificato indovinato (+4pt).
+  </p>`;
   el.innerHTML = html;
 }

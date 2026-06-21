@@ -173,6 +173,7 @@ const PARTICIPANT_TABS = [
   {id:"pronostici", label:"Pronostici partite"},
   {id:"gironi", label:"Classifica gironi"},
   {id:"premi", label:"Premi finali"},
+  {id:"fase-finale", label:"Fase finale"},
   {id:"classifica", label:"Classifica generale"},
   {id:"listone", label:"Listone"},
   {id:"regolamento", label:"Regolamento"}
@@ -220,6 +221,7 @@ function renderPanels(){
   else if(activeTab==="admin-risultati") renderRisultatiAdmin(el);
   else if(activeTab==="admin-tabellone") renderAdminTabellone(el);
   else if(activeTab==="listone") renderListone(el);
+  else if(activeTab==="fase-finale") renderFaseFinale(el);
 }
 
 // ============================================================
@@ -1376,4 +1378,121 @@ async function renderListoneKnockout(el){
     Il nome verde sotto il risultato indica il qualificato indovinato (+4pt).
   </p>`;
   el.innerHTML = html;
+}
+
+// ============================================================
+// TAB CONCORRENTE: FASE FINALE — inserimento pronostici knockout
+// ============================================================
+async function renderFaseFinale(el){
+  el.innerHTML = `<div class="loading-msg">Carico il tabellone fase finale…</div>`;
+  let koData, savedPreds, lockStatus;
+  try{
+    [koData, savedPreds, lockStatus] = await Promise.all([
+      apiGet("/knockout/matches"),
+      apiGet("/predictions/knockout"),
+      apiGet("/predictions/lock-status")
+    ]);
+  }catch(e){
+    el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  const { phases, matches } = koData;
+  const phaseOrder = ["sedicesimi","ottavi","quarti","semifinali","finale3","finale"];
+  const phaseLabels = {
+    sedicesimi:"Sedicesimi di finale", ottavi:"Ottavi di finale",
+    quarti:"Quarti di finale", semifinali:"Semifinali",
+    finale3:"Finale 3°/4° posto", finale:"Finale"
+  };
+
+  // Controlla se una fase è bloccata
+  function isPhaseLocked(phaseId){
+    const phase = phases.find(p => p.id === phaseId);
+    if(!phase) return false;
+    const lockTime = new Date(new Date(phase.firstKickoff).getTime() - 2*60*60*1000);
+    return new Date() >= lockTime;
+  }
+
+  let html = `
+    <div class="section-title">Pronostici fase finale</div>
+    <p class="section-desc">Le partite appaiono non appena le squadre sono note. Inserisci il risultato esatto — in caso di pareggio dopo i 90' si considera il risultato comprensivo dei supplementari. I campi in <span style="color:#ff8a7a">rosso</span> sono bloccati.</p>
+  `;
+
+  let hasAnyMatch = false;
+
+  phaseOrder.forEach(phaseId => {
+    const phaseMatches = matches.filter(m => m.phase === phaseId);
+    const locked = isPhaseLocked(phaseId);
+    // Mostra solo partite con almeno una squadra nota, o tutte se è una fase futura
+    const visibleMatches = phaseMatches.filter(m => m.homeTeam || m.awayTeam);
+    if(!visibleMatches.length) return;
+    hasAnyMatch = true;
+
+    html += `<div class="matchday-group card" style="margin-bottom:16px;">
+      <div class="matchday-label">${phaseLabels[phaseId]}${locked ? ' 🔒' : ''}</div>`;
+
+    visibleMatches.forEach(m => {
+      const pred = savedPreds[m.id] || {};
+      const homeLabel = m.homeTeam || `<span style="color:var(--chalk-dim);font-style:italic">${m.homeSlot}</span>`;
+      const awayLabel = m.awayTeam || `<span style="color:var(--chalk-dim);font-style:italic">${m.awaySlot}</span>`;
+      const koDate = m.kickoff ? new Date(m.kickoff).toLocaleDateString('it-IT',{day:'numeric',month:'short'}) : '';
+      const hasTeams = m.homeTeam && m.awayTeam;
+
+      // Risultato reale se disponibile
+      let realBadge = '';
+      if(m.result && m.result.home !== null && m.result.away !== null){
+        realBadge = `<span class="real-score" style="font-size:11px;margin-left:8px">${m.result.home}-${m.result.away}</span>`;
+      }
+
+      html += `<div class="match-row ${locked?'match-locked':''}">
+        <div class="match-meta">${koDate}${locked?' <span class="lock-badge">🔒</span>':''}</div>
+        <div class="match-team">${homeLabel}</div>
+        <div class="score-inputs">
+          <input type="number" min="0" max="20"
+            data-ko="${m.id}" data-side="home"
+            value="${pred.home ?? ''}"
+            ${(!hasTeams || locked) ? 'disabled' : ''}
+            class="${locked ? 'input-locked' : ''}">
+          <span class="score-sep">–</span>
+          <input type="number" min="0" max="20"
+            data-ko="${m.id}" data-side="away"
+            value="${pred.away ?? ''}"
+            ${(!hasTeams || locked) ? 'disabled' : ''}
+            class="${locked ? 'input-locked' : ''}">
+        </div>
+        <div class="match-team right">${awayLabel}</div>
+        <div>${realBadge}</div>
+      </div>`;
+    });
+
+    html += `</div>`;
+  });
+
+  if(!hasAnyMatch){
+    html += `<div class="empty-state" style="margin-top:32px;">
+      ⏳ Le partite della fase finale appariranno non appena l'admin inserirà le squadre qualificate dai gironi.
+    </div>`;
+  }
+
+  el.innerHTML = html;
+
+  // Event listeners per il salvataggio
+  el.querySelectorAll("input[data-ko]:not([disabled])").forEach(inp => {
+    inp.addEventListener("change", async () => {
+      const matchId = inp.dataset.ko;
+      const homeInp = el.querySelector(`input[data-ko="${matchId}"][data-side="home"]`);
+      const awayInp = el.querySelector(`input[data-ko="${matchId}"][data-side="away"]`);
+      pulseSync("saving");
+      try{
+        await apiPut(`/predictions/knockout/${matchId}`, {
+          home: homeInp.value === "" ? null : parseInt(homeInp.value, 10),
+          away: awayInp.value === "" ? null : parseInt(awayInp.value, 10)
+        });
+        pulseSync("ok");
+      }catch(e){
+        pulseSync("error");
+        showToast("Errore: " + e.message, true);
+      }
+    });
+  });
 }

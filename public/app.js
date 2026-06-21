@@ -851,7 +851,18 @@ function renderRegolamento(el){
       </ul>
 
       <h4>Classifica gironi</h4>
-      <p>Per ogni girone pronostichi l'ordine finale delle 4 squadre (1ª, 2ª, 3ª, 4ª posizione). Ogni posizione esatta vale punti in base al numero di concorrenti iscritti alla lega — con 36 concorrenti, ogni posizione corretta vale <b>12 punti</b>.</p>
+      <p>Per ogni girone pronostichi l'ordine finale delle 4 squadre (1ª, 2ª, 3ª, 4ª posizione). Il punteggio totale dipende da quante posizioni hai indovinato in tutti i gironi:</p>
+      <table style="width:100%;margin:10px 0;border-collapse:collapse;font-family:'Space Mono',monospace;font-size:12px">
+        <tr style="color:var(--gold-bright)"><th style="text-align:left;padding:4px 8px">Posizioni corrette</th><th style="text-align:right;padding:4px 8px">Punti totali</th></tr>
+        <tr><td style="padding:3px 8px">0 – 9</td><td style="text-align:right;padding:3px 8px">4</td></tr>
+        <tr><td style="padding:3px 8px">10 – 19</td><td style="text-align:right;padding:3px 8px">6</td></tr>
+        <tr><td style="padding:3px 8px">20 – 27</td><td style="text-align:right;padding:3px 8px">8</td></tr>
+        <tr><td style="padding:3px 8px">28 – 34</td><td style="text-align:right;padding:3px 8px">10</td></tr>
+        <tr><td style="padding:3px 8px">35 – 39</td><td style="text-align:right;padding:3px 8px">12</td></tr>
+        <tr><td style="padding:3px 8px">40 – 46</td><td style="text-align:right;padding:3px 8px">15</td></tr>
+        <tr><td style="padding:3px 8px">47 – 48</td><td style="text-align:right;padding:3px 8px">20</td></tr>
+      </table>
+      <p style="font-size:12px;color:var(--chalk-dim)">Es. se indovini 15 posizioni corrette su 48 totali → <b>6 punti</b> (fascia 10-19).</p>
 
       <h4>Premi finali</h4>
       <ul>

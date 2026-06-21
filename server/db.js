@@ -83,6 +83,28 @@ function init(){
   // Migration sicura: aggiunge group_phase_locked se non esiste (compatibile con DB già esistenti)
   try { db.exec("ALTER TABLE admin_settings ADD COLUMN group_phase_locked INTEGER DEFAULT 0"); } catch(e) {}
 
+  // Tabelle per la fase a eliminazione diretta
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS predictions_knockout (
+      participant_id INTEGER NOT NULL,
+      match_id TEXT NOT NULL,
+      home INTEGER,
+      away INTEGER,
+      qualifier TEXT,
+      PRIMARY KEY (participant_id, match_id),
+      FOREIGN KEY (participant_id) REFERENCES participants(id)
+    );
+    CREATE TABLE IF NOT EXISTS real_knockout (
+      match_id TEXT PRIMARY KEY,
+      home_team TEXT,
+      away_team TEXT,
+      home INTEGER,
+      away INTEGER,
+      qualifier TEXT,
+      updated_at TEXT
+    );
+  `);
+
   // Seed: garantisce riga unica per real_awards
   const ra = db.prepare("SELECT id FROM real_awards WHERE id = 1").get();
   if(!ra) db.prepare("INSERT INTO real_awards (id) VALUES (1)").run();

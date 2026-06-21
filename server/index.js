@@ -338,6 +338,60 @@ router.post("/api/admin/auto-group-order/:group", async (req, res, params) => {
   sendJson(res, 200, { group, order: ordered, stats });
 });
 
+// ---- ROUTE ADMIN: modifica pronostici concorrenti (bypassa blocco temporale) ----
+router.put("/api/admin/set-prediction/group-order/:participantId/:group/:pos", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const pid = parseInt(params.participantId, 10);
+  const group = params.group.toUpperCase();
+  const pos = parseInt(params.pos, 10);
+  const body = await readJsonBody(req);
+  if(!GROUPS[group] || pos < 0 || pos > 3) return sendJson(res, 400, { error: "Girone o posizione non validi" });
+  const p = db.prepare("SELECT id FROM participants WHERE id = ?").get(pid);
+  if(!p) return sendJson(res, 404, { error: "Concorrente non trovato" });
+  db.prepare(`
+    INSERT INTO predictions_group_order (participant_id, group_letter, pos, team)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(participant_id, group_letter, pos) DO UPDATE SET team=excluded.team
+  `).run(pid, group, pos, body.team || null);
+  sendJson(res, 200, { ok: true });
+});
+
+router.put("/api/admin/set-prediction/matches/:participantId/:matchId", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const pid = parseInt(params.participantId, 10);
+  const { matchId } = params;
+  const body = await readJsonBody(req);
+  const valid = MATCHES.some(m => m.id === matchId);
+  if(!valid) return sendJson(res, 400, { error: "Partita non valida" });
+  const p = db.prepare("SELECT id FROM participants WHERE id = ?").get(pid);
+  if(!p) return sendJson(res, 404, { error: "Concorrente non trovato" });
+  const h = body.home === "" || body.home === null || body.home === undefined ? null : parseInt(body.home, 10);
+  const a = body.away === "" || body.away === null || body.away === undefined ? null : parseInt(body.away, 10);
+  db.prepare(`
+    INSERT INTO predictions_matches (participant_id, match_id, home, away)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(participant_id, match_id) DO UPDATE SET home=excluded.home, away=excluded.away
+  `).run(pid, matchId, h, a);
+  sendJson(res, 200, { ok: true });
+});
+
+router.put("/api/admin/set-prediction/awards/:participantId", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const pid = parseInt(params.participantId, 10);
+  const body = await readJsonBody(req);
+  const p = db.prepare("SELECT id FROM participants WHERE id = ?").get(pid);
+  if(!p) return sendJson(res, 404, { error: "Concorrente non trovato" });
+  db.prepare(`
+    INSERT INTO predictions_awards (participant_id, winner, top_scorer, most_goals_team, best_player, best_goalkeeper)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(participant_id) DO UPDATE SET
+      winner=excluded.winner, top_scorer=excluded.top_scorer,
+      most_goals_team=excluded.most_goals_team, best_player=excluded.best_player,
+      best_goalkeeper=excluded.best_goalkeeper
+  `).run(pid, body.winner||"", body.top_scorer||"", body.most_goals_team||"", body.best_player||"", body.best_goalkeeper||"");
+  sendJson(res, 200, { ok: true });
+});
+
 // ---- BLOCCO/SBLOCCO FASE A GIRONI ----
 router.get("/api/admin/group-phase-status", async (req, res) => {
   if(!requireAdmin(req, res)) return;

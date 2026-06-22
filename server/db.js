@@ -82,6 +82,8 @@ function init(){
 
   // Migration sicura: aggiunge group_phase_locked se non esiste (compatibile con DB già esistenti)
   try { db.exec("ALTER TABLE admin_settings ADD COLUMN group_phase_locked INTEGER DEFAULT 0"); } catch(e) {}
+  // Migration sicura: aggiunge avatar_url ai partecipanti
+  try { db.exec("ALTER TABLE participants ADD COLUMN avatar_url TEXT DEFAULT NULL"); } catch(e) {}
 
   // Tabelle per la fase a eliminazione diretta
   db.exec(`

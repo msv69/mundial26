@@ -115,7 +115,7 @@ router.post("/api/auth/logout", async (req, res) => {
 
 router.get("/api/auth/me", async (req, res) => {
   if(req.session.participantId){
-    const p = db.prepare("SELECT id, name, team FROM participants WHERE id = ?").get(req.session.participantId);
+    const p = db.prepare("SELECT id, name, team, avatar_url FROM participants WHERE id = ?").get(req.session.participantId);
     if(p) return sendJson(res, 200, { type: "participant", ...p });
   }
   if(req.session.isAdmin) return sendJson(res, 200, { type: "admin" });
@@ -152,13 +152,13 @@ router.get("/api/tournament", async (req, res) => {
 
 // ---- CONCORRENTI ----
 router.get("/api/participants", async (req, res) => {
-  const rows = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const rows = db.prepare("SELECT id, name, team, avatar_url FROM participants ORDER BY id").all();
   sendJson(res, 200, rows);
 });
 
 router.get("/api/admin/participants", async (req, res) => {
   if(!requireAdmin(req, res)) return;
-  const rows = db.prepare("SELECT id, name, team, access_code FROM participants ORDER BY id").all();
+  const rows = db.prepare("SELECT id, name, team, access_code, avatar_url FROM participants ORDER BY id").all();
   sendJson(res, 200, rows);
 });
 
@@ -338,6 +338,87 @@ router.post("/api/admin/auto-group-order/:group", async (req, res, params) => {
   sendJson(res, 200, { group, order: ordered, stats });
 });
 
+// ---- UPLOAD AVATAR CONCORRENTE ----
+// Gestisce multipart/form-data manualmente (senza dipendenze esterne)
+router.post("/api/profile/avatar", async (req, res) => {
+  if(!requireParticipant(req, res)) return;
+  const pid = req.session.participantId;
+
+  const contentType = req.headers['content-type'] || '';
+  if(!contentType.includes('multipart/form-data')){
+    return sendJson(res, 400, { error: "Richiesta multipart richiesta" });
+  }
+
+  // Legge il body raw
+  const chunks = [];
+  await new Promise((resolve, reject) => {
+    req.on('data', c => chunks.push(c));
+    req.on('end', resolve);
+    req.on('error', reject);
+  });
+  const body = Buffer.concat(chunks);
+  if(body.length > 5 * 1024 * 1024) return sendJson(res, 400, { error: "File troppo grande (max 5MB)" });
+
+  // Estrae boundary dal Content-Type
+  const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
+  if(!boundaryMatch) return sendJson(res, 400, { error: "Boundary non trovato" });
+  const boundary = Buffer.from('--' + boundaryMatch[1]);
+
+  // Split per boundary
+  const parts = [];
+  let start = 0;
+  while(true){
+    const idx = body.indexOf(boundary, start);
+    if(idx === -1) break;
+    if(start > 0){
+      // Parte precedente: da start a idx (escludi fine riga)
+      let partEnd = idx;
+      if(body[partEnd-1] === 10) partEnd--;
+      if(body[partEnd-1] === 13) partEnd--;
+      parts.push(body.slice(start, partEnd));
+    }
+    start = idx + boundary.length + 2; // +2 per CRLF
+    if(body[idx + boundary.length] === 45) break; // "--" finale
+  }
+
+  // Trova la parte con il file immagine
+  let fileBuffer = null, fileExt = 'jpg';
+  for(const part of parts){
+    const headerEnd = part.indexOf(Buffer.from([13,10,13,10])); // \r\n\r\n
+    if(headerEnd === -1) continue;
+    const headerStr = part.slice(0, headerEnd).toString();
+    if(!headerStr.includes('filename=')) continue;
+    const mimeMatch = headerStr.match(/Content-Type:\s*image\/(jpeg|jpg|png|gif|webp)/i);
+    if(!mimeMatch) continue;
+    fileExt = mimeMatch[1].toLowerCase() === 'jpeg' ? 'jpg' : mimeMatch[1].toLowerCase();
+    fileBuffer = part.slice(headerEnd + 4);
+    break;
+  }
+
+  if(!fileBuffer || fileBuffer.length === 0)
+    return sendJson(res, 400, { error: "Nessun file immagine trovato" });
+
+  // Salva il file
+  const fs = require('fs');
+  const avatarDir = path.join(__dirname, '..', 'public', 'avatars');
+  if(!fs.existsSync(avatarDir)) fs.mkdirSync(avatarDir, { recursive: true });
+  const filename = "p" + pid + "." + fileExt;
+  const filepath = path.join(avatarDir, filename);
+
+  // Rimuove vecchi avatar dello stesso utente
+  ['jpg','jpeg','png','gif','webp'].forEach(ext => {
+    const oldPath = path.join(avatarDir, "p" + pid + "." + ext);
+    if(fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+  });
+
+  fs.writeFileSync(filepath, fileBuffer);
+  const avatarUrl = "/avatars/" + filename;
+
+  // Salva URL nel DB
+  db.prepare('UPDATE participants SET avatar_url = ? WHERE id = ?').run(avatarUrl, pid);
+  sendJson(res, 200, { ok: true, avatarUrl });
+});
+
 // ---- ROUTE ADMIN: modifica pronostici concorrenti (bypassa blocco temporale) ----
 router.put("/api/admin/set-prediction/group-order/:participantId/:group/:pos", async (req, res, params) => {
   if(!requireAdmin(req, res)) return;
@@ -425,7 +506,7 @@ router.get("/api/predictions/lock-status", async (req, res) => {
 router.get("/api/public/all-predictions/matches", async (req, res) => {
   if(!req.session.participantId && !req.session.isAdmin)
     return sendJson(res, 401, { error: "Accesso non autorizzato" });
-  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const participants = db.prepare("SELECT id, name, team, avatar_url FROM participants ORDER BY id").all();
   const allMatches = db.prepare("SELECT * FROM predictions_matches").all();
   const byParticipant = {};
   participants.forEach(p => { byParticipant[p.id] = { participant: p, matches: {} }; });
@@ -439,7 +520,7 @@ router.get("/api/public/all-predictions/matches", async (req, res) => {
 router.get("/api/public/all-predictions/groups", async (req, res) => {
   if(!req.session.participantId && !req.session.isAdmin)
     return sendJson(res, 401, { error: "Accesso non autorizzato" });
-  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const participants = db.prepare("SELECT id, name, team, avatar_url FROM participants ORDER BY id").all();
   const allGroups = db.prepare("SELECT * FROM predictions_group_order").all();
   const byParticipant = {};
   participants.forEach(p => { byParticipant[p.id] = { participant: p, groups: {} }; });
@@ -455,7 +536,7 @@ router.get("/api/public/all-predictions/groups", async (req, res) => {
 router.get("/api/public/all-predictions/awards", async (req, res) => {
   if(!req.session.participantId && !req.session.isAdmin)
     return sendJson(res, 401, { error: "Accesso non autorizzato" });
-  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const participants = db.prepare("SELECT id, name, team, avatar_url FROM participants ORDER BY id").all();
   const allAwards = db.prepare("SELECT * FROM predictions_awards").all();
   const byParticipant = {};
   participants.forEach(p => { byParticipant[p.id] = { participant: p, awards: {} }; });
@@ -469,7 +550,7 @@ router.get("/api/public/all-predictions/awards", async (req, res) => {
 // ---- PRONOSTICI DI TUTTI I CONCORRENTI (solo admin) ----
 router.get("/api/admin/all-predictions/matches", async (req, res) => {
   if(!requireAdmin(req, res)) return;
-  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const participants = db.prepare("SELECT id, name, team, avatar_url FROM participants ORDER BY id").all();
   const allMatches = db.prepare("SELECT * FROM predictions_matches").all();
   const byParticipant = {};
   participants.forEach(p => { byParticipant[p.id] = { participant: p, matches: {} }; });
@@ -482,7 +563,7 @@ router.get("/api/admin/all-predictions/matches", async (req, res) => {
 
 router.get("/api/admin/all-predictions/groups", async (req, res) => {
   if(!requireAdmin(req, res)) return;
-  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const participants = db.prepare("SELECT id, name, team, avatar_url FROM participants ORDER BY id").all();
   const allGroups = db.prepare("SELECT * FROM predictions_group_order").all();
   const byParticipant = {};
   participants.forEach(p => { byParticipant[p.id] = { participant: p, groups: {} }; });
@@ -497,7 +578,7 @@ router.get("/api/admin/all-predictions/groups", async (req, res) => {
 
 router.get("/api/admin/all-predictions/awards", async (req, res) => {
   if(!requireAdmin(req, res)) return;
-  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const participants = db.prepare("SELECT id, name, team, avatar_url FROM participants ORDER BY id").all();
   const allAwards = db.prepare("SELECT * FROM predictions_awards").all();
   const byParticipant = {};
   participants.forEach(p => { byParticipant[p.id] = { participant: p, awards: {} }; });
@@ -636,7 +717,7 @@ router.put("/api/admin/real/knockout/:matchId", async (req, res, params) => {
 router.get("/api/public/all-predictions/knockout", async (req, res) => {
   if(!req.session.participantId && !req.session.isAdmin)
     return sendJson(res, 401, { error: "Accesso non autorizzato" });
-  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const participants = db.prepare("SELECT id, name, team, avatar_url FROM participants ORDER BY id").all();
   const allKO = db.prepare("SELECT * FROM predictions_knockout").all();
   const byParticipant = {};
   participants.forEach(p => { byParticipant[p.id] = { participant: p, knockout: {} }; });
@@ -649,7 +730,7 @@ router.get("/api/public/all-predictions/knockout", async (req, res) => {
 
 router.get("/api/admin/all-predictions/knockout", async (req, res) => {
   if(!requireAdmin(req, res)) return;
-  const participants = db.prepare("SELECT id, name, team FROM participants ORDER BY id").all();
+  const participants = db.prepare("SELECT id, name, team, avatar_url FROM participants ORDER BY id").all();
   const allKO = db.prepare("SELECT * FROM predictions_knockout").all();
   const byParticipant = {};
   participants.forEach(p => { byParticipant[p.id] = { participant: p, knockout: {} }; });

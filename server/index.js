@@ -58,7 +58,7 @@ function requireAdmin(req, res){
 // Giornate 1+2 → bloccate dopo il 16/6/2026 ore 17:00 (2h prima della prima partita G2 del 16/6)
 // Giornata 3   → bloccata dopo il 23/6/2026 ore 17:00 (2h prima della prima partita G3 del 23/6)
 const LOCK_G1G2  = new Date("2026-06-16T17:00:00+02:00");
-const LOCK_G3    = new Date("2026-06-23T17:00:00+02:00");
+const LOCK_G3    = new Date("2026-06-24T17:00:00+02:00");
 const LOCK_GROUPS = new Date("2026-06-11T19:00:00+02:00"); // 2h prima del calcio d'inizio del Mondiale
 const LOCK_AWARDS = new Date("2026-06-11T19:00:00+02:00"); // stessa: inseriti prima dell'inizio
 

@@ -142,4 +142,4 @@ function generateAccessCode(){
   return code;
 }
 
-module.exports = { db, init, generateAccessCode };
+module.exports = { db, init, generateAccessCode, DB_PATH };

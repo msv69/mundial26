@@ -570,15 +570,22 @@ tr:hover td{ background: rgba(255,255,255,0.03); }
 .row-locked{ opacity: 0.75; }
 
 /* Tabellone admin */
-.tabellone-scroll{ overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.tabellone-table{ border-collapse: collapse; font-size: 11px; min-width: 800px; width: 100%; }
+.tabellone-scroll{
+  overflow: auto;
+  max-height: 75vh;
+  -webkit-overflow-scrolling: touch;
+}
+.tabellone-scroll table { border-collapse: separate; border-spacing: 0; }
+.tabellone-table{ border-collapse: separate; border-spacing: 0; font-size: 11px; min-width: 800px; width: 100%; }
 .tabellone-table th, .tabellone-table td{
   border: 1px solid var(--line); padding: 4px 6px; white-space: nowrap;
   text-align: center; vertical-align: middle;
 }
-.tabellone-table th{ background: rgba(255,255,255,0.06); font-family:'Oswald',sans-serif; font-size:11px; letter-spacing:0.3px; position: sticky; top: 0; }
-.tabellone-match-col{ text-align:left !important; min-width:130px; max-width:160px; white-space:normal !important; }
-.tabellone-real-col{ min-width:52px; background: rgba(247,197,72,0.07); }
+.tabellone-table th{ background: rgba(20,45,28,0.97); font-family:'Oswald',sans-serif; font-size:11px; letter-spacing:0.3px; position: sticky; top: 0; z-index: 10; }
+.tabellone-match-col{ text-align:left !important; min-width:130px; max-width:160px; white-space:normal !important; position:sticky; left:0; z-index:5; background:rgba(20,45,28,0.97); }
+.tabellone-table th.tabellone-match-col{ z-index:15; background:rgba(20,45,28,0.97); }
+.tabellone-real-col{ min-width:52px; background: rgba(247,197,72,0.07); position:sticky; left:160px; z-index:4; }
+.tabellone-table th.tabellone-real-col{ z-index:14; }
 .tabellone-p-col{ min-width:56px; }
 .tabellone-group-row td{ background: rgba(255,255,255,0.04); font-family:'Oswald',sans-serif; font-size:11px; letter-spacing:0.5px; color:var(--gold-bright); text-align:left !important; padding: 6px 8px; }
 .match-label{ display:block; font-weight:600; font-size:11px; }
@@ -588,6 +595,7 @@ tr:hover td{ background: rgba(255,255,255,0.03); }
 .pred-sign{ background: rgba(247,197,72,0.18); color: var(--gold-bright); }
 .real-score{ font-family:'Space Mono',monospace; font-weight:700; color: var(--gold-bright); }
 .no-data{ color: var(--chalk-dim); font-size:10px; }
+.hidden-pred{ color: var(--chalk-dim); font-size:11px; opacity:0.4; letter-spacing:1px; }
 .row-pending{ opacity: 0.6; }
 .slot-label{ font-style:italic; color:var(--chalk-dim); font-size:10px; }
 .qualifier-badge{ font-family:'Space Mono',monospace; font-size:9px; color:#7fd99a; margin-left:3px; }

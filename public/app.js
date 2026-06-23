@@ -134,14 +134,48 @@ function renderLoginScreen(){
   }
 }
 
+function avatarHtml(avatarUrl, name, size){
+  size = size || 32;
+  if(avatarUrl){
+    return '<img src="' + escapeHtml(avatarUrl) + '?t=' + Date.now() + '" alt="' + escapeHtml(name) + '" style="width:' + size + 'px;height:' + size + 'px;border-radius:50%;object-fit:cover;border:2px solid var(--gold);vertical-align:middle;margin-right:6px;">';
+  }
+  const initial = (name||'?')[0].toUpperCase();
+  const fs = Math.round(size*0.45);
+  return '<span style="display:inline-flex;align-items:center;justify-content:center;width:' + size + 'px;height:' + size + 'px;border-radius:50%;background:var(--gold);color:#1b1304;font-weight:700;font-size:' + fs + 'px;font-family:Oswald,sans-serif;border:2px solid var(--gold);margin-right:6px;vertical-align:middle;flex-shrink:0">' + initial + '</span>';
+}
+
 function renderAccountBar(){
   const bar = document.getElementById("top-account-bar");
   if(SESSION.type === "participant"){
     bar.innerHTML = `
       <span class="sync-pill" id="sync-pill"><span class="dot"></span> sincronizzato</span>
+      ${avatarHtml(SESSION.avatar_url, SESSION.name, 32)}
       <span>Stai giocando come <b>${escapeHtml(SESSION.name)}</b></span>
+      <label class="btn-ghost" style="cursor:pointer;font-size:11px" title="Cambia foto profilo">📷
+        <input type="file" accept="image/*" id="avatar-upload" style="display:none">
+      </label>
       <button class="btn-ghost" id="logout-btn">Esci</button>
     `;
+    document.getElementById("avatar-upload").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if(!file) return;
+      if(file.size > 5*1024*1024){ showToast("File troppo grande (max 5MB)", true); return; }
+      const formData = new FormData();
+      formData.append("avatar", file);
+      pulseSync("saving");
+      try{
+        const res = await fetch("/api/profile/avatar", { method:"POST", body:formData, credentials:"include" });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error);
+        SESSION.avatar_url = data.avatarUrl;
+        pulseSync("ok");
+        showToast("Foto profilo aggiornata!");
+        renderAccountBar();
+      }catch(err){
+        pulseSync("error");
+        showToast("Errore upload: " + err.message, true);
+      }
+    });
   } else if(SESSION.type === "admin"){
     bar.innerHTML = `
       <span class="sync-pill" id="sync-pill"><span class="dot"></span> sincronizzato</span>
@@ -812,7 +846,7 @@ async function renderClassificaGenerale(el){
       : `<span style="color:var(--chalk-dim)">${p.punteggioGironi}</span>`;
     tr.innerHTML = `
       <td data-label="Pos." class="num-mono">${idx+1}°</td>
-      <td data-label="Concorrente"><b>${escapeHtml(p.name)}</b>${p.team ? ` <span style="color:var(--chalk-dim);font-size:11px"> ${escapeHtml(p.team)}</span>` : ""}</td>
+      <td data-label="Concorrente" style="display:flex;align-items:center;gap:4px">${avatarHtml(p.avatar_url, p.name, 28)}<span><b>${escapeHtml(p.name)}</b>${p.team ? ` <span style="color:var(--chalk-dim);font-size:11px"> ${escapeHtml(p.team)}</span>` : ""}</span></td>
       <td data-label="Esatti" class="num">${p.breakdown.risultatoEsatto}</td>
       <td data-label="1X2" class="num">${p.breakdown.segno1x2}</td>
       <td data-label="Tot. partite" class="num partite-col"><b>${p.totalePartite}</b></td>
@@ -1158,7 +1192,7 @@ async function renderListonePartite(el){
   let html = `<div class="tabellone-scroll"><table class="tabellone-table"><thead><tr>
     <th class="tabellone-match-col">Partita</th>
     <th class="tabellone-real-col">Reale</th>
-    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${escapeHtml(p.name)}</th>`).join('')}
+    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${avatarHtml(p.avatar_url||null, p.name, 22)}<br>${escapeHtml(p.name)}</th>`).join('')}
   </tr></thead><tbody>`;
 
   Object.keys(matchesByGroup).sort().forEach(g=>{
@@ -1173,9 +1207,13 @@ async function renderListonePartite(el){
         <td class="tabellone-match-col"><span class="match-label">${m.home} vs ${m.away}</span><span class="match-date-small">${m.date}</span></td>
         <td class="tabellone-real-col">${realStr}</td>`;
       participants.forEach(p=>{
+        const isMine = p.id === SESSION.id;
+        const isHidden = !isAdmin && !isMine && !locked;
         const pred = predictions[p.id] && predictions[p.id].matches[m.id];
         let cell = `<span class="no-data">—</span>`;
-        if(pred && pred.home !== null && pred.away !== null){
+        if(isHidden){
+          cell = `<span class="hidden-pred">?</span>`;
+        } else if(pred && pred.home !== null && pred.away !== null){
           const isExact = real && real.home !== null && Number(pred.home)===Number(real.home) && Number(pred.away)===Number(real.away);
           const real1x2 = real ? (Number(real.home)>Number(real.away)?'1':Number(real.home)<Number(real.away)?'2':'X') : null;
           const pred1x2 = Number(pred.home)>Number(pred.away)?'1':Number(pred.home)<Number(pred.away)?'2':'X';
@@ -1183,7 +1221,6 @@ async function renderListonePartite(el){
           const cls = isExact ? 'pred-exact' : isSign ? 'pred-sign' : '';
           cell = `<span class="pred-score ${cls}">${pred.home}-${pred.away}</span>`;
         }
-        const isMine = p.id === SESSION.id;
         html += `<td class="tabellone-p-col${isMine?' me-col':''}">${cell}</td>`;
       });
       html += `</tr>`;
@@ -1201,23 +1238,32 @@ async function renderListonePartite(el){
 async function renderListoneGironi(el){
   el.innerHTML = `<div class="loading-msg">Carico…</div>`;
   const isAdmin = SESSION.type === "admin";
-  let data, realData;
+  let data, realData, lockStatus;
   try{
     const predsEndpoint = isAdmin ? "/admin/all-predictions/groups" : "/public/all-predictions/groups";
-    [data, realData] = await Promise.all([
+    [data, realData, lockStatus] = await Promise.all([
       apiGet(predsEndpoint),
-      apiGet("/real/group-order")
+      apiGet("/real/group-order"),
+      apiGet("/predictions/lock-status")
     ]);
   }catch(e){
     el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
     return;
   }
   const { participants, predictions } = data;
+  const gironiLocked = isAdmin || (lockStatus.groups && lockStatus.groups.locked);
+  if(!gironiLocked){
+    el.innerHTML = `<div class="section-desc" style="margin-top:32px;text-align:center;padding:24px">
+      🔒 I pronostici degli altri concorrenti saranno visibili dopo il blocco della fase a gironi.<br><br>
+      Puoi vedere solo i <b>tuoi</b> nel tab "Classifica gironi".
+    </div>`;
+    return;
+  }
 
   let html = `<div class="tabellone-scroll"><table class="tabellone-table"><thead><tr>
     <th class="tabellone-match-col">Girone / Pos.</th>
     <th class="tabellone-real-col">Reale</th>
-    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${escapeHtml(p.name)}</th>`).join('')}
+    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${avatarHtml(p.avatar_url||null, p.name, 22)}<br>${escapeHtml(p.name)}</th>`).join('')}
   </tr></thead><tbody>`;
 
   Object.keys(TOURNAMENT.groups).sort().forEach(g=>{
@@ -1248,18 +1294,27 @@ async function renderListoneGironi(el){
 async function renderListonePremi(el){
   el.innerHTML = `<div class="loading-msg">Carico…</div>`;
   const isAdmin = SESSION.type === "admin";
-  let data, realData;
+  let data, realData, lockStatus;
   try{
     const predsEndpoint = isAdmin ? "/admin/all-predictions/awards" : "/public/all-predictions/awards";
-    [data, realData] = await Promise.all([
+    [data, realData, lockStatus] = await Promise.all([
       apiGet(predsEndpoint),
-      apiGet("/real/awards")
+      apiGet("/real/awards"),
+      apiGet("/predictions/lock-status")
     ]);
   }catch(e){
     el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
     return;
   }
   const { participants, predictions } = data;
+  const premiLocked = isAdmin || (lockStatus.awards && lockStatus.awards.locked);
+  if(!premiLocked){
+    el.innerHTML = `<div class="section-desc" style="margin-top:32px;text-align:center;padding:24px">
+      🔒 I pronostici degli altri concorrenti saranno visibili dopo il blocco dei premi finali.<br><br>
+      Puoi vedere solo i <b>tuoi</b> nel tab "Premi finali".
+    </div>`;
+    return;
+  }
 
   const awardFields = [
     {field:"winner",          label:"🏆 Vincitore"},
@@ -1272,7 +1327,7 @@ async function renderListonePremi(el){
   let html = `<div class="tabellone-scroll"><table class="tabellone-table"><thead><tr>
     <th class="tabellone-match-col">Premio</th>
     <th class="tabellone-real-col">Reale</th>
-    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${escapeHtml(p.name)}</th>`).join('')}
+    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${avatarHtml(p.avatar_url||null, p.name, 22)}<br>${escapeHtml(p.name)}</th>`).join('')}
   </tr></thead><tbody>`;
 
   awardFields.forEach(({field, label})=>{
@@ -1295,6 +1350,7 @@ async function renderListonePremi(el){
 
   html += `</tbody></table></div>`;
   el.innerHTML = html;
+  requestAnimationFrame(() => attachStickyHeader(el.querySelector('.tabellone-scroll')));
 }
 
 // ============================================================
@@ -1328,14 +1384,19 @@ async function renderListoneKnockout(el){
   let html = `<div class="tabellone-scroll"><table class="tabellone-table"><thead><tr>
     <th class="tabellone-match-col">Partita</th>
     <th class="tabellone-real-col">Reale</th>
-    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${escapeHtml(p.name)}</th>`).join('')}
+    ${participants.map(p=>`<th class="tabellone-p-col ${p.id===SESSION.id?'me-col':''}">${avatarHtml(p.avatar_url||null, p.name, 22)}<br>${escapeHtml(p.name)}</th>`).join('')}
   </tr></thead><tbody>`;
 
   phaseOrder.forEach(phaseId => {
     const phaseMatches = matches.filter(m => m.phase === phaseId);
     if(!phaseMatches.length) return;
 
-    html += `<tr class="tabellone-group-row"><td colspan="${participants.length+2}">${phaseLabels[phaseId]}</td></tr>`;
+    // Controlla se questa fase è bloccata
+    const phase = phases.find(p => p.id === phaseId);
+    const phaseLockTime = phase ? new Date(new Date(phase.firstKickoff).getTime() - 2*60*60*1000) : null;
+    const phaseIsLocked = isAdmin || (phaseLockTime && new Date() >= phaseLockTime);
+
+    html += `<tr class="tabellone-group-row"><td colspan="${participants.length+2}">${phaseLabels[phaseId]}${!phaseIsLocked?' <span style="font-size:10px;color:var(--chalk-dim)">(visibile dopo il blocco)</span>':''}</td></tr>`;
 
     phaseMatches.forEach(m => {
       const homeLabel = m.homeTeam || `<span class="slot-label">${escapeHtml(m.homeSlot)}</span>`;
@@ -1360,9 +1421,13 @@ async function renderListoneKnockout(el){
         <td class="tabellone-real-col">${realCell}</td>`;
 
       participants.forEach(p => {
+        const isMine = p.id === SESSION.id;
+        const isHiddenKO = !isAdmin && !isMine && !phaseIsLocked;
         const pred = predictions[p.id] && predictions[p.id].knockout[m.id];
         let cell = `<span class="no-data">—</span>`;
-        if(pred && pred.home !== null && pred.away !== null && hasTeams){
+        if(isHiddenKO){
+          cell = `<span class="hidden-pred">?</span>`;
+        } else if(pred && pred.home !== null && pred.away !== null && hasTeams){
           const isExact = m.result && m.result.home !== null &&
             Number(pred.home)===Number(m.result.home) && Number(pred.away)===Number(m.result.away);
           const predQ = pred.qualifier;
@@ -1374,7 +1439,6 @@ async function renderListoneKnockout(el){
         } else if(pred && pred.qualifier && !hasTeams){
           cell = `<span class="pred-score" style="font-size:10px">${escapeHtml(pred.qualifier)}</span>`;
         }
-        const isMine = p.id === SESSION.id;
         html += `<td class="tabellone-p-col${isMine?' me-col':''}">${cell}</td>`;
       });
 
@@ -1506,4 +1570,65 @@ async function renderFaseFinale(el){
       }
     });
   });
+}
+
+// ============================================================
+// STICKY HEADER LISTONE — clona l'intestazione e la tiene fissa
+// (necessario perché overflow-x:auto interferisce con sticky:top)
+// ============================================================
+function attachStickyHeader(scrollEl) {
+  const table = scrollEl.querySelector('.tabellone-table');
+  if (!table) return;
+  const thead = table.querySelector('thead');
+  if (!thead) return;
+
+  // Crea intestazione clonata fissa
+  const clone = document.createElement('div');
+  clone.className = 'sticky-thead-clone';
+  clone.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:100;overflow:hidden;display:none;pointer-events:none;';
+
+  const cloneTable = document.createElement('table');
+  cloneTable.className = table.className;
+  cloneTable.style.cssText = 'border-collapse:separate;border-spacing:0;table-layout:fixed;margin:0;';
+  const cloneThead = thead.cloneNode(true);
+  cloneTable.appendChild(cloneThead);
+  clone.appendChild(cloneTable);
+  document.body.appendChild(clone);
+
+  function syncClone() {
+    const rect = scrollEl.getBoundingClientRect();
+    const theadRect = thead.getBoundingClientRect();
+
+    if (theadRect.bottom < 0 && rect.bottom > 0) {
+      // Intestazione fuori viewport ma tabella ancora visibile → mostra clone
+      clone.style.display = 'block';
+      clone.style.left = rect.left + 'px';
+      clone.style.width = rect.width + 'px';
+      clone.style.backgroundColor = 'rgba(20,45,28,0.97)';
+      clone.style.borderBottom = '1px solid var(--line)';
+      // Sincronizza scroll orizzontale
+      cloneTable.style.marginLeft = -scrollEl.scrollLeft + 'px';
+      // Sincronizza larghezze colonne
+      const origCells = thead.querySelectorAll('th');
+      const cloneCells = cloneThead.querySelectorAll('th');
+      origCells.forEach((th, i) => {
+        if (cloneCells[i]) cloneCells[i].style.width = th.offsetWidth + 'px';
+      });
+    } else {
+      clone.style.display = 'none';
+    }
+  }
+
+  window.addEventListener('scroll', syncClone);
+  scrollEl.addEventListener('scroll', syncClone);
+
+  // Rimuovi clone quando il pannello viene rimosso dal DOM
+  const observer = new MutationObserver(() => {
+    if (!document.body.contains(scrollEl)) {
+      clone.remove();
+      window.removeEventListener('scroll', syncClone);
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.getElementById('panels'), { childList: true, subtree: true });
 }

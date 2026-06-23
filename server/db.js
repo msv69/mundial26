@@ -7,7 +7,9 @@ const fs = require("fs");
 const { DatabaseSync } = require("node:sqlite");
 const { PARTICIPANT_NAMES } = require("./data");
 
-const DATA_DIR = path.join(__dirname, "..", "data");
+const DATA_DIR = process.env.NODE_ENV === "production"
+  ? "/data"
+  : path.join(__dirname, "..", "data");
 if(!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, "tabellone.db");
 

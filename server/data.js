@@ -92,7 +92,7 @@ const MATCHES = [
   {id:"L1", group:"L", date:"Mer 17 Giu", kickoff:"2026-06-17T22:00:00+02:00", home:"Inghilterra", away:"Croazia"},
   {id:"L2", group:"L", date:"Gio 18 Giu", kickoff:"2026-06-18T01:00:00+02:00", home:"Ghana", away:"Panama"},
   {id:"L3", group:"L", date:"Mar 23 Giu", kickoff:"2026-06-23T22:00:00+02:00", home:"Inghilterra", away:"Ghana"},
-  {id:"L4", group:"L", date:"Mer 24 Giu", kickoff:"2026-06-24T01:00:00+02:00", home:"Croazia", away:"Panama"},
+  {id:"L4", group:"L", date:"Mer 24 Giu", kickoff:"2026-06-24T01:00:00+02:00", home:"Panama", away:"Croazia"},
   {id:"L5", group:"L", date:"Sab 27 Giu", kickoff:"2026-06-27T23:00:00+02:00", home:"Inghilterra", away:"Panama"},
   {id:"L6", group:"L", date:"Sab 27 Giu", kickoff:"2026-06-27T23:00:00+02:00", home:"Croazia", away:"Ghana"}
 ];

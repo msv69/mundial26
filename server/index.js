@@ -170,6 +170,16 @@ router.post("/api/admin/participants/:id/regenerate-code", async (req, res, para
   sendJson(res, 200, { id, accessCode: newCode });
 });
 
+router.post("/api/admin/participants/:id/set-code", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const id = parseInt(params.id, 10);
+  const body = await readJsonBody(req);
+  if(!body.code || body.code.length < 4) return sendJson(res, 400, { error: "Codice troppo corto" });
+  const code = body.code.trim().toUpperCase();
+  db.prepare("UPDATE participants SET access_code = ? WHERE id = ?").run(code, id);
+  sendJson(res, 200, { id, accessCode: code });
+});
+
 router.put("/api/admin/participants/:id", async (req, res, params) => {
   if(!requireAdmin(req, res)) return;
   const id = parseInt(params.id, 10);

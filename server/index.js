@@ -11,7 +11,7 @@ const url = require("url");
 const { Router, readJsonBody } = require("./router");
 const { sessionMiddleware, applySessionCookie } = require("./sessions");
 const { hashPassword, verifyPassword } = require("./auth");
-const { db, init, generateAccessCode } = require("./db");
+const { db, init, generateAccessCode, DB_PATH } = require("./db");
 const { MATCHES, GROUPS, ALL_TEAMS, POINTS } = require("./data");
 const { computeLeaderboard, getRealMatches, getRealGroupOrder, getRealAwards } = require("./scoring");
 
@@ -58,7 +58,7 @@ function requireAdmin(req, res){
 // Giornate 1+2 → bloccate dopo il 16/6/2026 ore 17:00 (2h prima della prima partita G2 del 16/6)
 // Giornata 3   → bloccata dopo il 23/6/2026 ore 17:00 (2h prima della prima partita G3 del 23/6)
 const LOCK_G1G2  = new Date("2026-06-16T17:00:00+02:00");
-const LOCK_G3    = new Date("2026-06-24T19:00:00+02:00");
+const LOCK_G3    = new Date("2026-06-24T17:00:00+02:00");
 const LOCK_GROUPS = new Date("2026-06-11T19:00:00+02:00"); // 2h prima del calcio d'inizio del Mondiale
 const LOCK_AWARDS = new Date("2026-06-11T19:00:00+02:00"); // stessa: inseriti prima dell'inizio
 
@@ -749,6 +749,24 @@ router.get("/api/admin/all-predictions/knockout", async (req, res) => {
       byParticipant[r.participant_id].knockout[r.match_id] = { home: r.home, away: r.away, qualifier: r.qualifier };
   });
   sendJson(res, 200, { participants, predictions: byParticipant });
+});
+
+// ---- BACKUP DATABASE ----
+router.get("/api/admin/backup", async (req, res) => {
+  if(!requireAdmin(req, res)) return;
+  const fs = require("fs");
+  // Forza checkpoint WAL per incorporare tutte le transazioni pendenti
+  db.exec("PRAGMA wal_checkpoint(FULL)");
+  const dbPath = DB_PATH;
+  if(!fs.existsSync(dbPath)) return sendJson(res, 404, { error: "Database non trovato" });
+  const stat = fs.statSync(dbPath);
+  const date = new Date().toISOString().slice(0,10);
+  res.writeHead(200, {
+    "Content-Type": "application/octet-stream",
+    "Content-Disposition": `attachment; filename="tabellone_${date}.db"`,
+    "Content-Length": stat.size
+  });
+  fs.createReadStream(dbPath).pipe(res);
 });
 
 // ---- CLASSIFICA GENERALE ----

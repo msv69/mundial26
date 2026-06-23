@@ -1329,6 +1329,7 @@ async function renderListonePremi(el){
 
   html += `</tbody></table></div>`;
   el.innerHTML = html;
+  requestAnimationFrame(() => attachStickyHeader(el.querySelector('.tabellone-scroll')));
 }
 
 // ============================================================
@@ -1540,4 +1541,65 @@ async function renderFaseFinale(el){
       }
     });
   });
+}
+
+// ============================================================
+// STICKY HEADER LISTONE — clona l'intestazione e la tiene fissa
+// (necessario perché overflow-x:auto interferisce con sticky:top)
+// ============================================================
+function attachStickyHeader(scrollEl) {
+  const table = scrollEl.querySelector('.tabellone-table');
+  if (!table) return;
+  const thead = table.querySelector('thead');
+  if (!thead) return;
+
+  // Crea intestazione clonata fissa
+  const clone = document.createElement('div');
+  clone.className = 'sticky-thead-clone';
+  clone.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:100;overflow:hidden;display:none;pointer-events:none;';
+
+  const cloneTable = document.createElement('table');
+  cloneTable.className = table.className;
+  cloneTable.style.cssText = 'border-collapse:separate;border-spacing:0;table-layout:fixed;margin:0;';
+  const cloneThead = thead.cloneNode(true);
+  cloneTable.appendChild(cloneThead);
+  clone.appendChild(cloneTable);
+  document.body.appendChild(clone);
+
+  function syncClone() {
+    const rect = scrollEl.getBoundingClientRect();
+    const theadRect = thead.getBoundingClientRect();
+
+    if (theadRect.bottom < 0 && rect.bottom > 0) {
+      // Intestazione fuori viewport ma tabella ancora visibile → mostra clone
+      clone.style.display = 'block';
+      clone.style.left = rect.left + 'px';
+      clone.style.width = rect.width + 'px';
+      clone.style.backgroundColor = 'rgba(20,45,28,0.97)';
+      clone.style.borderBottom = '1px solid var(--line)';
+      // Sincronizza scroll orizzontale
+      cloneTable.style.marginLeft = -scrollEl.scrollLeft + 'px';
+      // Sincronizza larghezze colonne
+      const origCells = thead.querySelectorAll('th');
+      const cloneCells = cloneThead.querySelectorAll('th');
+      origCells.forEach((th, i) => {
+        if (cloneCells[i]) cloneCells[i].style.width = th.offsetWidth + 'px';
+      });
+    } else {
+      clone.style.display = 'none';
+    }
+  }
+
+  window.addEventListener('scroll', syncClone);
+  scrollEl.addEventListener('scroll', syncClone);
+
+  // Rimuovi clone quando il pannello viene rimosso dal DOM
+  const observer = new MutationObserver(() => {
+    if (!document.body.contains(scrollEl)) {
+      clone.remove();
+      window.removeEventListener('scroll', syncClone);
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.getElementById('panels'), { childList: true, subtree: true });
 }

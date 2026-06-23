@@ -180,8 +180,29 @@ function renderAccountBar(){
     bar.innerHTML = `
       <span class="sync-pill" id="sync-pill"><span class="dot"></span> sincronizzato</span>
       <span class="admin-badge">ADMIN</span>
+      <a href="/api/admin/backup" class="btn-ghost" id="backup-btn" title="Scarica backup database">💾 Backup DB</a>
       <button class="btn-ghost" id="logout-btn">Esci</button>
     `;
+    // Il link di backup deve portare il cookie di sessione — non funziona direttamente
+    // quindi lo gestiamo via fetch con download programmatico
+    document.getElementById("backup-btn").addEventListener("click", async (e) => {
+      e.preventDefault();
+      try{
+        const res = await fetch("/api/admin/backup", { credentials: "include" });
+        if(!res.ok){ showToast("Errore backup: " + res.status, true); return; }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const date = new Date().toISOString().slice(0,10);
+        a.href = url;
+        a.download = "tabellone_" + date + ".db";
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast("Backup scaricato!");
+      }catch(err){
+        showToast("Errore: " + err.message, true);
+      }
+    });
   }
   const logoutBtn = document.getElementById("logout-btn");
   if(logoutBtn) logoutBtn.addEventListener("click", async ()=>{

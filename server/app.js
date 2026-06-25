@@ -1000,12 +1000,13 @@ async function renderAdminTabellone(el){
 }
 
 async function renderTabellonePartite(el){
+  const ts = Date.now();
   let data, realData, lockStatus;
   try{
     [data, realData, lockStatus] = await Promise.all([
-      apiGet("/admin/all-predictions/matches"),
-      apiGet("/real/matches"),
-      apiGet("/predictions/lock-status")
+      apiGet("/admin/all-predictions/matches?t=" + ts),
+      apiGet("/real/matches?t=" + ts),
+      apiGet("/predictions/lock-status?t=" + ts)
     ]);
   }catch(e){
     el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;

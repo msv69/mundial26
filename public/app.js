@@ -784,13 +784,19 @@ async function renderAdminRisultatiPremi(el){
     const val = real[def.field] || "";
     const card = document.createElement("div");
     card.className = "award-card";
+    // most_goals_team: testo libero per supportare più squadre separate da virgola
+    const isText = def.type === "text" || def.field === "most_goals_team";
+    const placeholder = def.field === "most_goals_team"
+      ? "Es: Germania oppure Germania, Francia"
+      : def.type === "team" ? "Seleziona squadra" : "Nome e cognome";
     card.innerHTML = `
       <span class="icon">${def.icon}</span>
       <div class="award-title">${def.title}</div>
-      ${def.type==="team"
+      ${!isText
         ? `<select data-realaward="${def.field}">${teamOptionsHtml(val)}</select>`
-        : `<input type="text" data-realaward="${def.field}" value="${escapeHtml(val)}" placeholder="Nome e cognome">`
+        : `<input type="text" data-realaward="${def.field}" value="${escapeHtml(val)}" placeholder="${placeholder}">`
       }
+      ${def.field === "most_goals_team" ? `<div style="font-size:10px;color:var(--chalk-dim);margin-top:4px">Per più squadre a pari merito separa con virgola</div>` : ""}
     `;
     grid.appendChild(card);
   });
@@ -1000,12 +1006,13 @@ async function renderAdminTabellone(el){
 }
 
 async function renderTabellonePartite(el){
+  const ts = Date.now();
   let data, realData, lockStatus;
   try{
     [data, realData, lockStatus] = await Promise.all([
-      apiGet("/admin/all-predictions/matches"),
-      apiGet("/real/matches"),
-      apiGet("/predictions/lock-status")
+      apiGet("/admin/all-predictions/matches?t=" + ts),
+      apiGet("/real/matches?t=" + ts),
+      apiGet("/predictions/lock-status?t=" + ts)
     ]);
   }catch(e){
     el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;

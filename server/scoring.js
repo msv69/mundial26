@@ -146,8 +146,12 @@ function calcPunteggioPremi(participantId, realAwards){
   if(ra.top_scorer && pa.top_scorer &&
      normalizeName(ra.top_scorer) === normalizeName(pa.top_scorer))
     punti += POINTS.topScorer;
-  if(ra.most_goals_team && pa.most_goals_team && ra.most_goals_team === pa.most_goals_team)
-    punti += POINTS.mostGoalsTeamGroups;
+  if(ra.most_goals_team && pa.most_goals_team){
+    // Supporta più squadre a pari merito separate da virgola (es. "Germania,Francia")
+    const realTeams = ra.most_goals_team.split(',').map(t => t.trim().toLowerCase());
+    if(realTeams.includes(pa.most_goals_team.trim().toLowerCase()))
+      punti += POINTS.mostGoalsTeamGroups;
+  }
   if(ra.best_player && pa.best_player &&
      normalizeName(ra.best_player) === normalizeName(pa.best_player))
     punti += POINTS.bestPlayer;

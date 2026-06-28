@@ -58,7 +58,7 @@ function requireAdmin(req, res){
 // Giornate 1+2 → bloccate dopo il 16/6/2026 ore 17:00 (2h prima della prima partita G2 del 16/6)
 // Giornata 3   → bloccata dopo il 23/6/2026 ore 17:00 (2h prima della prima partita G3 del 23/6)
 const LOCK_G1G2  = new Date("2026-06-16T17:00:00+02:00");
-const LOCK_G3    = new Date("2026-06-24T19:00:00+02:00");
+const LOCK_G3    = new Date("2026-06-24T17:00:00+02:00");
 const LOCK_GROUPS = new Date("2026-06-11T19:00:00+02:00"); // 2h prima del calcio d'inizio del Mondiale
 const LOCK_AWARDS = new Date("2026-06-11T19:00:00+02:00"); // stessa: inseriti prima dell'inizio
 
@@ -463,6 +463,24 @@ router.put("/api/admin/set-prediction/matches/:participantId/:matchId", async (r
     VALUES (?, ?, ?, ?)
     ON CONFLICT(participant_id, match_id) DO UPDATE SET home=excluded.home, away=excluded.away
   `).run(pid, matchId, h, a);
+  sendJson(res, 200, { ok: true });
+});
+
+router.put("/api/admin/set-prediction/knockout/:participantId/:matchId", async (req, res, params) => {
+  if(!requireAdmin(req, res)) return;
+  const pid = parseInt(params.participantId, 10);
+  const { matchId } = params;
+  const body = await readJsonBody(req);
+  const p = db.prepare("SELECT id FROM participants WHERE id = ?").get(pid);
+  if(!p) return sendJson(res, 404, { error: "Concorrente non trovato" });
+  const h = body.home === "" || body.home === null || body.home === undefined ? null : parseInt(body.home, 10);
+  const a = body.away === "" || body.away === null || body.away === undefined ? null : parseInt(body.away, 10);
+  const q = body.qualifier || null;
+  db.prepare(`
+    INSERT INTO predictions_knockout (participant_id, match_id, home, away, qualifier)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(participant_id, match_id) DO UPDATE SET home=excluded.home, away=excluded.away, qualifier=excluded.qualifier
+  `).run(pid, matchId, h, a, q);
   sendJson(res, 200, { ok: true });
 });
 

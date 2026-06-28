@@ -579,7 +579,7 @@ async function renderAdminConcorrenti(el){
 // ============================================================
 // TAB ADMIN: RISULTATI REALI (partite, gironi, premi)
 // ============================================================
-let adminResultsSubTab = "partite"; // 'partite' | 'gironi' | 'premi'
+let adminResultsSubTab = "partite"; // 'partite' | 'gironi' | 'premi' | 'knockout'
 
 async function renderRisultatiAdmin(el){
   // Recupera stato gironi
@@ -610,6 +610,7 @@ async function renderRisultatiAdmin(el){
       <button class="subtab-btn ${adminResultsSubTab==='partite'?'active':''}" data-sub="partite">Risultati partite</button>
       <button class="subtab-btn ${adminResultsSubTab==='gironi'?'active':''}" data-sub="gironi">Classifica gironi</button>
       <button class="subtab-btn ${adminResultsSubTab==='premi'?'active':''}" data-sub="premi">Premi finali</button>
+      <button class="subtab-btn ${adminResultsSubTab==='knockout'?'active':''}" data-sub="knockout">Fase finale</button>
     </div>
     <div id="admin-results-content"></div>
   `;
@@ -643,6 +644,7 @@ async function renderRisultatiAdmin(el){
   const content = el.querySelector("#admin-results-content");
   if(adminResultsSubTab === "partite") await renderAdminRisultatiPartite(content);
   else if(adminResultsSubTab === "gironi") await renderAdminRisultatiGironi(content);
+  else if(adminResultsSubTab === "knockout") await renderAdminRisultatiKnockout(content);
   else await renderAdminRisultatiPremi(content);
 }
 
@@ -762,6 +764,104 @@ async function renderAdminRisultatiGironi(el){
         await renderAdminRisultatiGironi(el);
       }catch(e){
         showToast("Errore: " + e.message, true);
+      }
+    });
+  });
+}
+
+async function renderAdminRisultatiKnockout(el){
+  el.innerHTML = `<div class="loading-msg">Carico il tabellone fase finale…</div>`;
+  let koData;
+  try{
+    koData = await apiGet("/knockout/matches?t=" + Date.now());
+  }catch(e){
+    el.innerHTML = `<div class="empty-state">Errore: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  const { phases, matches } = koData;
+  const phaseOrder = ["sedicesimi","ottavi","quarti","semifinali","finale3","finale"];
+  const phaseLabels = {
+    sedicesimi:"Sedicesimi di finale", ottavi:"Ottavi di finale",
+    quarti:"Quarti di finale", semifinali:"Semifinali",
+    finale3:"Finale 3°/4° posto", finale:"Finale"
+  };
+
+  el.innerHTML = `<div class="section-desc" style="margin-bottom:12px">
+    Inserisci i risultati reali al <b>90° minuto</b>. Per ogni partita indica le due squadre, il risultato e chi si è qualificato al turno successivo.
+  </div>`;
+
+  phaseOrder.forEach(phaseId => {
+    const phaseMatches = matches.filter(m => m.phase === phaseId);
+    if(!phaseMatches.length) return;
+
+    const section = document.createElement("div");
+    section.className = "matchday-group card";
+    section.style.marginBottom = "16px";
+    section.innerHTML = `<div class="matchday-label">${phaseLabels[phaseId]}</div>`;
+
+    phaseMatches.forEach(m => {
+      const r = m.result || {};
+      const homeTeam = m.homeTeam || m.homeSlot;
+      const awayTeam = m.awayTeam || m.awaySlot;
+      const hasTeams = m.homeTeam && m.awayTeam;
+
+      const row = document.createElement("div");
+      row.className = "match-row";
+      row.style.flexWrap = "wrap";
+      row.style.gap = "8px";
+      row.innerHTML = `
+        <div class="match-meta" style="width:100%;font-size:11px;color:var(--chalk-dim)">${m.id} — ${m.kickoff ? new Date(m.kickoff).toLocaleDateString('it-IT',{day:'numeric',month:'short'}) : ''}</div>
+        <input type="text" placeholder="Squadra casa" data-ko="${m.id}" data-field="homeTeam"
+          value="${escapeHtml(m.homeTeam||'')}" style="width:140px;${!hasTeams?'border-color:var(--gold)':''}">
+        <div class="score-inputs">
+          <input type="number" min="0" max="20" data-ko="${m.id}" data-field="home"
+            value="${r.home !== null && r.home !== undefined ? r.home : ''}" style="width:52px">
+          <span class="score-sep">–</span>
+          <input type="number" min="0" max="20" data-ko="${m.id}" data-field="away"
+            value="${r.away !== null && r.away !== undefined ? r.away : ''}" style="width:52px">
+        </div>
+        <input type="text" placeholder="Squadra trasferta" data-ko="${m.id}" data-field="awayTeam"
+          value="${escapeHtml(m.awayTeam||'')}" style="width:140px;${!hasTeams?'border-color:var(--gold)':''}">
+        <select data-ko="${m.id}" data-field="qualifier" style="width:160px">
+          <option value="">— Qualificata —</option>
+          ${m.homeTeam ? `<option value="${escapeHtml(m.homeTeam)}" ${r.qualifier===m.homeTeam?'selected':''}>${escapeHtml(m.homeTeam)}</option>` : ''}
+          ${m.awayTeam ? `<option value="${escapeHtml(m.awayTeam)}" ${r.qualifier===m.awayTeam?'selected':''}>${escapeHtml(m.awayTeam)}</option>` : ''}
+        </select>
+        <button class="btn-primary" data-save="${m.id}" style="font-size:12px;padding:6px 12px">💾 Salva</button>
+        ${r.qualifier ? `<span style="color:#7fd99a;font-size:12px">✅ ${escapeHtml(r.qualifier)}</span>` : ''}
+      `;
+      section.appendChild(row);
+    });
+
+    el.appendChild(section);
+  });
+
+  // Event listeners salvataggio
+  el.querySelectorAll("button[data-save]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const matchId = btn.dataset.save;
+      const homeTeam = el.querySelector(`input[data-ko="${matchId}"][data-field="homeTeam"]`).value.trim();
+      const awayTeam = el.querySelector(`input[data-ko="${matchId}"][data-field="awayTeam"]`).value.trim();
+      const homeVal = el.querySelector(`input[data-ko="${matchId}"][data-field="home"]`).value;
+      const awayVal = el.querySelector(`input[data-ko="${matchId}"][data-field="away"]`).value;
+      const qualifier = el.querySelector(`select[data-ko="${matchId}"][data-field="qualifier"]`).value;
+
+      pulseSync("saving");
+      try{
+        await apiPut(`/admin/real/knockout/${matchId}`, {
+          homeTeam: homeTeam || null,
+          awayTeam: awayTeam || null,
+          home: homeVal === "" ? null : parseInt(homeVal, 10),
+          away: awayVal === "" ? null : parseInt(awayVal, 10),
+          qualifier: qualifier || null
+        });
+        pulseSync("ok");
+        showToast(`${matchId} salvato!`);
+        renderAdminRisultatiKnockout(el);
+      }catch(err){
+        pulseSync("error");
+        showToast("Errore: " + err.message, true);
       }
     });
   });

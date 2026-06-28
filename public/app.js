@@ -860,6 +860,7 @@ async function renderClassificaGenerale(el){
       <th class="num partite-col">Tot. partite</th>
       <th class="num provvisorio-col">Provvisorio</th>
       <th class="num gironi-col">${gironiLabel}</th>
+      <th class="num" style="color:var(--chalk-dim)">🥅 Reti</th>
       <th class="num total-col">${totDefLabel}</th>
     </tr></thead>
     <tbody></tbody>
@@ -879,6 +880,7 @@ async function renderClassificaGenerale(el){
       <td data-label="Tot. partite" class="num partite-col"><b>${p.totalePartite}</b></td>
       <td data-label="Provvisorio" class="num provvisorio-col"><b>${p.totaleProvvisorio}</b></td>
       <td data-label="${gironiLabel}" class="num gironi-col">${gironiCell}</td>
+      <td data-label="🥅 Reti" class="num">${p.breakdown.premi > 0 ? '<b style="color:#7fd99a">+'+p.breakdown.premi+'</b>' : '<span style="color:var(--chalk-dim)">—</span>'}</td>
       <td data-label="${totDefLabel}" class="num total-col"><b>${p.totaleDefinitivo}</b></td>
     `;
     tbody.appendChild(tr);

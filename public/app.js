@@ -910,7 +910,14 @@ function renderRegolamento(el){
       <h4>Punteggi partite della fase a gironi</h4>
       <ul>
         <li><b>${P.exactScore} punti</b> per ogni risultato esatto pronosticato (es. 2-1 e finisce 2-1).</li>
-        <li><b>${P.result1x2} punti</b> se non indovini il risultato esatto ma indovini l'esito (1, X o 2). I punti per risultato esatto e per esito 1X2 non si somm­ano tra loro: vale il punteggio più alto ottenuto per quella partita.</li>
+        <li><b>${P.result1x2} punti</b> se non indovini il risultato esatto ma indovini l'esito (1, X o 2). I punti per risultato esatto e per esito 1X2 non si sommano tra loro: vale il punteggio più alto ottenuto per quella partita.</li>
+      </ul>
+
+      <h4>Punteggi partite dalla fase finale (sedicesimi in poi)</h4>
+      <p>I risultati della fase ad eliminazione diretta si considerano <b>solo al 90° minuto</b> — eventuali supplementari e rigori non vengono conteggiati.</p>
+      <ul>
+        <li><b>${P.knockoutExactScore} punti</b> per ogni risultato esatto al 90° pronosticato correttamente.</li>
+        <li><b>${P.knockoutResult1x2} punti</b> se non indovini il risultato esatto ma indovini l'esito al 90° (1, X o 2).</li>
       </ul>
 
       <h4>Classifica gironi</h4>
@@ -937,7 +944,7 @@ function renderRegolamento(el){
       </ul>
 
       <h4>Aggiornamento risultati</h4>
-      <p>I risultati ufficiali vengono inseriti manualmente dall'amministratore della lega non appena disponibili (non esiste un collegamento automatico al sito ufficiale FIFA). La classifica generale si aggiorna automaticamente non appena un risultato viene inserito.</p>
+      <p>I risultati ufficiali vengono inseriti manualmente dall'amministratore della lega non appena disponibili. La classifica generale si aggiorna automaticamente non appena un risultato viene inserito.</p>
     </div>
   `;
 }
@@ -1520,7 +1527,7 @@ async function renderFaseFinale(el){
 
   let html = `
     <div class="section-title">Pronostici fase finale</div>
-    <p class="section-desc">Le partite appaiono non appena le squadre sono note. Inserisci il risultato esatto — in caso di pareggio dopo i 90' si considera il risultato comprensivo dei supplementari. I campi in <span style="color:#ff8a7a">rosso</span> sono bloccati.</p>
+    <p class="section-desc">Le partite appaiono non appena le squadre sono note. Inserisci il risultato esatto <b>al 90° minuto</b> — supplementari e rigori non vengono conteggiati. I campi in <span style="color:#ff8a7a">rosso</span> sono bloccati.</p>
   `;
 
   let hasAnyMatch = false;

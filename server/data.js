@@ -190,8 +190,8 @@ const POINTS = {
   bestGoalkeeper: 5,
   exactScore: 5,
   result1x2: 2,
-  knockoutExactScore: 8,
-  knockoutResult1x2: 3,
+  knockoutExactScore: 5,
+  knockoutResult1x2: 2,
   knockoutQualified: 4
 };
 

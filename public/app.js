@@ -957,7 +957,8 @@ async function renderClassificaGenerale(el){
       <th>Concorrente</th>
       <th class="num">Esatti</th>
       <th class="num">1X2</th>
-      <th class="num partite-col">Tot. partite</th>
+      <th class="num partite-col">Tot. gironi</th>
+      <th class="num" style="color:#7fd99a">Fase finale</th>
       <th class="num provvisorio-col">Provvisorio</th>
       <th class="num gironi-col">${gironiLabel}</th>
       <th class="num" style="color:var(--chalk-dim)">🥅 Reti</th>
@@ -977,8 +978,9 @@ async function renderClassificaGenerale(el){
       <td data-label="Concorrente" style="display:flex;align-items:center;gap:4px">${avatarHtml(p.avatar_url, p.name, 28)}<span><b>${escapeHtml(p.name)}</b>${p.team ? ` <span style="color:var(--chalk-dim);font-size:11px"> ${escapeHtml(p.team)}</span>` : ""}</span></td>
       <td data-label="Esatti" class="num">${p.breakdown.risultatoEsatto}</td>
       <td data-label="1X2" class="num">${p.breakdown.segno1x2}</td>
-      <td data-label="Tot. partite" class="num partite-col"><b>${p.totalePartite}</b></td>
-      <td data-label="Provvisorio" class="num provvisorio-col"><b>${p.totaleProvvisorio}</b></td>
+      <td data-label="Tot. gironi" class="num partite-col"><b>${p.totalePartite}</b></td>
+      <td data-label="Fase finale" class="num" style="color:#7fd99a"><b>${p.totaleKnockout || 0}</b></td>
+      <td data-label="Provvisorio" class="num provvisorio-col"><b>${p.totaleProvvisorio + (p.totaleKnockout||0)}</b></td>
       <td data-label="${gironiLabel}" class="num gironi-col">${gironiCell}</td>
       <td data-label="🥅 Reti" class="num">${p.breakdown.premi > 0 ? '<b style="color:#7fd99a">+'+p.breakdown.premi+'</b>' : '<span style="color:var(--chalk-dim)">—</span>'}</td>
       <td data-label="${totDefLabel}" class="num total-col"><b>${p.totaleDefinitivo}</b></td>

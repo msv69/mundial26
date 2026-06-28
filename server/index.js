@@ -13,7 +13,7 @@ const { sessionMiddleware, applySessionCookie } = require("./sessions");
 const { hashPassword, verifyPassword } = require("./auth");
 const { db, init, generateAccessCode, DB_PATH } = require("./db");
 const { MATCHES, GROUPS, ALL_TEAMS, POINTS } = require("./data");
-const { computeLeaderboard, getRealMatches, getRealGroupOrder, getRealAwards } = require("./scoring");
+const { computeLeaderboard, getRealMatches, getRealGroupOrder, getRealAwards, isGroupPhaseLocked, normalizeName } = require("./scoring");
 
 init();
 
